@@ -134,6 +134,7 @@ public actor HLLPurchaseCoordinator {
     /// revocation; current entitlements catches active subscription upgrades.
     @discardableResult
     public func refresh() async -> HLLPurchaseSnapshot {
+        let cached = await snapshotStore.readBest()
         var states: [String: TransactionState] = [:]
         for definition in configuration.products {
             if let result = await Transaction.latest(for: definition.id),
@@ -155,6 +156,14 @@ public actor HLLPurchaseCoordinator {
                 revocationDate: transaction.revocationDate)
         }
         let next = makeSnapshot(states: states, checkedAt: .now)
+        if !next.hasTransactionEvidence,
+           let cached, cached.hasActiveEntitlement(at: .now) {
+            // Do not replace a valid cached purchase with an empty result when
+            // StoreKit is temporarily unable to see the App Store account.
+            snapshot = cached
+            for continuation in streams.values { continuation.yield(cached) }
+            return cached
+        }
         await publish(next)
         return next
     }

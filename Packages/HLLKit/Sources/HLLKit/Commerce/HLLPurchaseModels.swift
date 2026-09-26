@@ -124,6 +124,17 @@ public struct HLLPurchaseSnapshot: Codable, Hashable, Sendable {
         features[feature] ?? HLLFeatureEntitlement(feature: feature, isUnlocked: false)
     }
 
+    /// True when StoreKit (or a cached StoreKit projection) has seen at least
+    /// one configured product. An empty StoreKit response can otherwise be
+    /// indistinguishable from a temporarily unavailable App Store account.
+    public var hasTransactionEvidence: Bool {
+        features.values.contains { !$0.productIDs.isEmpty }
+    }
+
+    public func hasActiveEntitlement(at date: Date = .now) -> Bool {
+        HLLPaidFeature.allCases.contains { isUnlocked($0, at: date) }
+    }
+
     public func isUnlocked(_ feature: HLLPaidFeature, at date: Date = .now) -> Bool {
         entitlement(for: feature).isActive(at: date)
     }

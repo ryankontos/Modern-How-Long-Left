@@ -29,16 +29,28 @@ public struct HLLPurchaseEntitlementReader: Sendable {
         // CloudKit recovery and StoreKit evaluation run in parallel. The
         // extension uses the first StoreKit result and does not wait on CloudKit
         // when it already has an authoritative answer.
+        let local = store.readLocal()
         let cloudTask = Task { await store.readCloud() }
         let fresh = await freshSnapshotWithinDeadline()
         if let fresh {
+            if !fresh.hasTransactionEvidence {
+                let cached: HLLPurchaseSnapshot?
+                if let local {
+                    cached = local
+                } else {
+                    cached = await cloudTask.value
+                }
+                if let cached, cached.hasActiveEntitlement(at: .now) {
+                    cloudTask.cancel()
+                    return cached
+                }
+            }
             try? store.writeLocal(fresh)
             cloudTask.cancel()
             return fresh
         }
 
         let cached = await cloudTask.value
-        let local = store.readLocal()
         return [local, cached].compactMap { $0 }.max { $0.checkedAt < $1.checkedAt }
             ?? .locked(configuration: configuration, source: .cloudKitCache)
     }
