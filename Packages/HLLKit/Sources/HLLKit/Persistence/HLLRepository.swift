@@ -27,6 +27,17 @@ public actor HLLRepository {
         try await database.put(settings, kind: .preference, key: "app", location: .cloud)
     }
 
+    public func widgetDefaults() async throws -> HLLWidgetDefaults {
+        let values: [HLLWidgetDefaults] = try await database.all(
+            HLLWidgetDefaults.self, kind: .preference, location: .cloud)
+        return values.first ?? HLLWidgetDefaults()
+    }
+
+    public func save(_ defaults: HLLWidgetDefaults) async throws {
+        try await database.put(defaults, kind: .preference,
+                               key: "widget-defaults", location: .cloud)
+    }
+
     public func userEvents() async throws -> [HLLUserEvent] {
         try await database.all(HLLUserEvent.self, kind: .userEvent, location: .cloud)
     }

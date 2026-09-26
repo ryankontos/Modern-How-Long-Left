@@ -41,6 +41,8 @@ Maintenance is bounded and infrequent: expired occurrence annotations, old local
 
 The app also writes the latest extension projection to one replaceable private CloudKit record. Extensions try that record with a short timeout and select the newest result between CloudKit and the local App Group snapshot. If the account is offline or unavailable, the local snapshot remains usable.
 
+The iOS shell uses a UIKit app and scene delegate with a `UIHostingController` root. SwiftUI provides a Current tab with live countdowns, a separate Upcoming tab, event details, context-menu actions, and a settings sheet. The watch app has its own runtime and a compact vertical-page interface, so it continues to use watchOS calendars when the iPhone is unavailable. Both apps keep the first frame blank until the first event snapshot exists, then fade the loaded content in.
+
 ## Extensions and Live Activities
 
 Widgets and complications use `AppIntentConfiguration`. Users can choose current, in-progress, or upcoming events, include or exclude all-day events, select one event, choose a style, and choose a row count. WatchOS intentionally returns no recommendations so configuration remains explicit.
@@ -53,9 +55,9 @@ Live Activities use the same `HLLEvent` query path. A user can start one immedia
 
 - Xcode 27.2 beta (the project uses the new JSON `.xcproj` format).
 - Latest major iOS, watchOS, and macOS SDKs available in the selected Xcode.
-- A real Apple Team, bundle identifier, App Group, and CloudKit container before device signing.
+- A real Apple Team and provisioning profiles before device signing.
 
-The checked-in identifiers are development placeholders (`com.ryan.HowLongLeft`, `group.com.ryan.HowLongLeft`, and `iCloud.com.ryan.HowLongLeft`). Replace them in the project and entitlements for a real account.
+The checked-in identifiers and version metadata are carried over from the original How Long Left project: team `5AMFX8X5ZN`, iOS bundle `com.ryankontos.How-Long-Left`, watch bundle `com.ryankontos.How-Long-Left.watchkit`, App Group `group.com.ryankontos.How-Long-Left`, CloudKit container `iCloud.ryankontos.howlongleft`, version `3.0`, iOS build `253`, and watch build `247`. The original project never shipped, so this workspace does not include a migration layer.
 
 ## Verification
 

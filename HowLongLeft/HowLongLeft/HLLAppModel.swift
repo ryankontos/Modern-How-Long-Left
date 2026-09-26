@@ -13,6 +13,7 @@ final class HLLAppModel {
     var hiddenAnnotations: [HLLEventAnnotation] = []
     var annotationSyncEnabled = true
     var activityPolicies: [HLLLiveActivityPolicy] = []
+    var widgetDefaults = HLLWidgetDefaults()
     var activeActivityEventKeys: Set<String> = []
     var needsCalendarAccess = false
     var isLoading = true
@@ -21,29 +22,52 @@ final class HLLAppModel {
     private var runtime: HLLRuntime?
     private var revisionTask: Task<Void, Never>?
     private var boundaryTask: Task<Void, Never>?
+    private var hasStarted = false
+
+    func currentEvents(at date: Date = .now) -> [HLLEvent] {
+        events.filter { $0.isRunning(at: date) }
+    }
+
+    func upcomingEvents(at date: Date = .now) -> [HLLEvent] {
+        events.filter { $0.start > date }
+    }
+
+    func event(withID id: UUID) -> HLLEvent? {
+        events.first { $0.id == id }
+    }
 
     func start() {
-        // Render the last atomic projection while the CloudKit mirror opens.
-        // This keeps first paint independent of network and Core Data setup.
-        let cachedEvents = Task.detached(priority: .userInitiated) {
-            let payload = HLLWidgetSnapshotStore(groupIdentifier: "group.com.ryan.HowLongLeft").read()
+        guard !hasStarted else { return }
+        hasStarted = true
+        // Permission status is cheap to read and does not require opening the
+        // CloudKit mirror. Show the empty shell immediately on a fresh install
+        // while the user decides whether to grant calendar access.
+        if EKEventStore.authorizationStatus(for: .event) != .fullAccess {
+            needsCalendarAccess = true
+            isLoading = false
+        }
+        // EventKit and the last App Group projection can answer before the
+        // CloudKit mirror finishes opening. This is the fast first-frame path.
+        let quickEvents = Task.detached(priority: .userInitiated) {
+            let payload = await HLLExtensionSnapshotLoader().load(
+                groupIdentifier: HLLConfiguration.appGroupIdentifier, now: .now)
             return payload?.query(HLLEventQuery(
                 interval: DateInterval(start: .now.addingTimeInterval(-86_400),
                                        end: .now.addingTimeInterval(30 * 86_400)),
                 rule: .upcoming(.now), context: "home.main"))
         }
         Task { [weak self] in
-            guard let events = await cachedEvents.value else { return }
-            await MainActor.run {
-                guard let self, self.isLoading else { return }
-                self.events = events
-            }
+            guard let events = await quickEvents.value else { return }
+            guard let self, self.isLoading else { return }
+            self.events = events
+            self.isLoading = false
         }
+
         Task { [weak self] in
             do {
                 let runtime = try await HLLRuntime.shared(
-                    groupIdentifier: "group.com.ryan.HowLongLeft",
-                    cloudContainerIdentifier: "iCloud.com.ryan.HowLongLeft")
+                    groupIdentifier: HLLConfiguration.appGroupIdentifier,
+                    cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier)
                 guard let self else { return }
                 self.runtime = runtime
                 needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
@@ -63,6 +87,7 @@ final class HLLAppModel {
             do {
                 needsCalendarAccess = !(try await runtime.eventKit.requestAccess())
                 await runtime.engine.invalidate()
+                await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -90,6 +115,7 @@ final class HLLAppModel {
                 .filter { $0.kind == .hidden }
             annotationSyncEnabled = try await runtime.repository.settings().syncEventAnnotations
             activityPolicies = try await runtime.repository.activityPolicies()
+            widgetDefaults = try await runtime.repository.widgetDefaults()
             needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
             isLoading = false
             scheduleNextBoundary(now: now)
@@ -114,12 +140,28 @@ final class HLLAppModel {
     }
 
     func addUserEvent(title: String, start: Date, duration: TimeInterval,
-                      recurrence: HLLRecurrenceRule?) {
+                      isAllDay: Bool = false, recurrence: HLLRecurrenceRule?) {
         guard let runtime else { return }
         Task {
             do {
                 try await runtime.engine.save(HLLUserEvent(title: title, start: start,
-                                                            duration: duration, recurrence: recurrence))
+                                                            duration: duration, isAllDay: isAllDay,
+                                                            recurrence: recurrence))
+                await refresh()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    /// User occurrences are generated from one definition. Deleting any
+    /// occurrence removes that definition; hiding remains available when the
+    /// user wants to skip only one occurrence of a repeating event.
+    func deleteUserEvent(_ event: HLLEvent) {
+        guard event.source == .user, let runtime else { return }
+        let definitionID = event.seriesID.flatMap(UUID.init(uuidString:)) ?? event.id
+        Task {
+            do {
+                try await runtime.engine.deleteUserEvent(id: definitionID)
+                await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -137,6 +179,7 @@ final class HLLAppModel {
                     expiresAt: scope == .occurrence ? event.end.addingTimeInterval(90 * 86_400) : nil,
                     syncAcrossDevices: settings.syncEventAnnotations && canSync)
                 try await runtime.engine.save(annotation)
+                await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -145,8 +188,11 @@ final class HLLAppModel {
                                context: HLLContextID, visible: Bool) {
         guard let runtime else { return }
         Task {
-            do { try await runtime.engine.setCalendarVisibility(profileID: calendar.id,
-                                                                 context: context, isVisible: visible) }
+            do {
+                try await runtime.engine.setCalendarVisibility(profileID: calendar.id,
+                                                                context: context, isVisible: visible)
+                await refresh()
+            }
             catch { errorMessage = error.localizedDescription }
         }
     }
@@ -156,6 +202,7 @@ final class HLLAppModel {
         Task {
             do { try await runtime.engine.removeAnnotation(id: annotation.id) }
             catch { errorMessage = error.localizedDescription }
+            await refresh()
         }
     }
 
@@ -164,6 +211,16 @@ final class HLLAppModel {
         annotationSyncEnabled = enabled
         Task {
             do { try await runtime.engine.setAnnotationSync(enabled) }
+            catch { errorMessage = error.localizedDescription }
+            await refresh()
+        }
+    }
+
+    func setWidgetDefaults(_ defaults: HLLWidgetDefaults) {
+        guard let runtime else { return }
+        widgetDefaults = defaults
+        Task {
+            do { try await runtime.repository.save(defaults) }
             catch { errorMessage = error.localizedDescription }
         }
     }

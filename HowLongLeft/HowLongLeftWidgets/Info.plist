@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>HLLAppGroupIdentifier</key>
-	<string>group.com.ryan.HowLongLeft</string>
+	<string>group.com.ryankontos.How-Long-Left</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>

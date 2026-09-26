@@ -13,8 +13,8 @@ import SwiftUI
 struct HowLongLeftComplicationsBundle: WidgetBundle {
     var body: some Widget {
         HLLWidget(kind: "HowLongLeftComplications", contextID: "complication.default",
-                  groupIdentifier: "group.com.ryan.HowLongLeft",
-                  cloudContainerIdentifier: "iCloud.com.ryan.HowLongLeft",
+                  groupIdentifier: HLLConfiguration.appGroupIdentifier,
+                  cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier,
                   families: [.accessoryInline, .accessoryCircular, .accessoryRectangular])
     }
 }
