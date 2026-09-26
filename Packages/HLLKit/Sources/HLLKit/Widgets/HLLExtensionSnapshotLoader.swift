@@ -24,15 +24,12 @@ public struct HLLExtensionSnapshotLoader: Sendable {
     public func load(groupIdentifier: String, cloudContainerIdentifier: String? = nil,
                      now: Date = .now) async -> HLLWidgetPayload? {
         let cached = HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier).read()
-        // Both records have the same short deadline. Fetching them together
-        // prevents a settings projection from adding another CloudKit wait.
-        async let cloudTask = cloudProjection(cloudContainerIdentifier)
         async let sharedTask = sharedProjection(cloudContainerIdentifier)
-        let cloud = await cloudTask
         let shared = await sharedTask
-        let platformSeed = [cached, cloud].compactMap { $0 }
-            .max { $0.generatedAt < $1.generatedAt }
-        let seed = merge(shared: shared, into: platformSeed, now: now)
+        // Calendar occurrences are never fetched from CloudKit. The local
+        // App Group snapshot is only a same-device seed; local EventKit is
+        // authoritative whenever access is available.
+        let seed = merge(shared: shared, into: cached, now: now)
         let source = HLLEventKitSource()
         let interval = DateInterval(start: now.addingTimeInterval(-86_400),
                                     end: now.addingTimeInterval(14 * 86_400))
@@ -89,21 +86,6 @@ public struct HLLExtensionSnapshotLoader: Sendable {
                                 userDefinitions: seed?.userDefinitions ?? [],
                                 calendars: calendars,
                                 annotations: seed?.annotations ?? [])
-    }
-
-    private func cloudProjection(_ identifier: String?) async -> HLLWidgetPayload? {
-        guard let identifier, !identifier.isEmpty else { return nil }
-        // CloudKit must not consume a widget's whole timeline budget offline.
-        return await withTaskGroup(of: HLLWidgetPayload?.self) { group in
-            group.addTask { await HLLCloudProjectionStore(containerIdentifier: identifier).read() }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(1.5))
-                return nil
-            }
-            let value = await group.next() ?? nil
-            group.cancelAll()
-            return value
-        }
     }
 
     private func sharedProjection(_ identifier: String?) async -> HLLSharedSettingsProjection? {

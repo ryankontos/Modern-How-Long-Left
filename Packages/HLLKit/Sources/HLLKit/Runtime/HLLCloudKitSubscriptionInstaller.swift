@@ -9,7 +9,6 @@ import Foundation
 /// has been closed for a long time. Installation is idempotent and always runs
 /// off the launch-critical path.
 public actor HLLCloudKitSubscriptionInstaller {
-    public static let projectionSubscriptionID = "hll.projection.remote-change.v1"
     public static let settingsSubscriptionID = "hll.settings.remote-change.v1"
     public static let purchaseSubscriptionID = "hll.purchase.remote-change.v1"
 
@@ -24,8 +23,6 @@ public actor HLLCloudKitSubscriptionInstaller {
     @discardableResult
     public func install() async -> Bool {
         let definitions = [
-            makeSubscription(recordType: HLLCloudProjectionStore.recordType,
-                             id: Self.projectionSubscriptionID),
             makeSubscription(recordType: HLLSharedSettingsProjectionStore.recordType,
                              id: Self.settingsSubscriptionID),
             makeSubscription(recordType: HLLPurchaseSnapshotStore.recordType,

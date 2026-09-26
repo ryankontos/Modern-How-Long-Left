@@ -15,8 +15,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     /// CloudKit can deliver a remote-change push while no scene is active.
-    /// Refresh the small extension projection here so widgets do not wait for
-    /// the user to reopen the app after a synced change.
+    /// Refresh local EventKit snapshots here so widgets do not wait for the
+    /// user to reopen the app after a synced settings change.
     func application(_ application: UIApplication,
                      didReceiveRemoteNotification userInfo: [AnyHashable: Any],
                      fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {

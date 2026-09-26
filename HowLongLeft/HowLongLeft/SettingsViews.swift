@@ -529,7 +529,7 @@ private struct AboutSettingsView: View {
                 LabeledContent("Architecture", value: "HLLKit + Swift 6")
             }
             Section("Storage") {
-                Text("Settings and user events use the HLLKit repository. The app group keeps one atomic extension snapshot, while CloudKit stores the shared mirror and a replace-in-place extension projection.")
+                Text("Settings and user events use the HLLKit repository. The app group keeps one atomic local EventKit snapshot, while CloudKit stores portable settings and user-created data only.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

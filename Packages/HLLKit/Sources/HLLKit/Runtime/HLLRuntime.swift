@@ -6,7 +6,6 @@ public actor HLLRuntime {
     public let repository: HLLRepository
     public let engine: HLLEventEngine
     public let widgetStore: HLLWidgetSnapshotStore
-    public let cloudProjection: HLLCloudProjectionStore?
     /// StoreKit-backed entitlement coordinator shared by every feature boundary.
     /// The actor owns transaction updates and persists a small cache for extensions.
     public let purchases: HLLPurchaseCoordinator
@@ -18,20 +17,18 @@ public actor HLLRuntime {
 #endif
     private var lastPublishedRevision: UInt64?
     private var lastPublishedAt: Date?
-    private var lastCloudProjectionRevision: UInt64?
     private let cloudContainerIdentifier: String?
+    private var lastSharedSettingsProjection: HLLSharedSettingsProjection?
 
     #if canImport(UserNotifications)
     private init(eventKit: HLLEventKitSource, repository: HLLRepository,
                  engine: HLLEventEngine, widgetStore: HLLWidgetSnapshotStore,
-                 cloudProjection: HLLCloudProjectionStore?,
                  cloudContainerIdentifier: String?, purchases: HLLPurchaseCoordinator,
                  notifications: HLLNotificationScheduler) {
         self.eventKit = eventKit
         self.repository = repository
         self.engine = engine
         self.widgetStore = widgetStore
-        self.cloudProjection = cloudProjection
         self.cloudContainerIdentifier = cloudContainerIdentifier
         self.purchases = purchases
         self.notifications = notifications
@@ -43,13 +40,11 @@ public actor HLLRuntime {
     #else
     private init(eventKit: HLLEventKitSource, repository: HLLRepository,
                  engine: HLLEventEngine, widgetStore: HLLWidgetSnapshotStore,
-                 cloudProjection: HLLCloudProjectionStore?,
                  cloudContainerIdentifier: String?, purchases: HLLPurchaseCoordinator) {
         self.eventKit = eventKit
         self.repository = repository
         self.engine = engine
         self.widgetStore = widgetStore
-        self.cloudProjection = cloudProjection
         self.cloudContainerIdentifier = cloudContainerIdentifier
         self.purchases = purchases
 #if os(iOS)
@@ -124,13 +119,11 @@ public actor HLLRuntime {
 #if canImport(UserNotifications)
         return HLLRuntime(eventKit: eventKit, repository: repository, engine: engine,
                           widgetStore: HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier),
-                          cloudProjection: HLLCloudProjectionStore(containerIdentifier: cloudContainerIdentifier),
                           cloudContainerIdentifier: cloudContainerIdentifier,
                           purchases: purchases, notifications: notifications)
 #else
         return HLLRuntime(eventKit: eventKit, repository: repository, engine: engine,
                           widgetStore: HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier),
-                          cloudProjection: HLLCloudProjectionStore(containerIdentifier: cloudContainerIdentifier),
                           cloudContainerIdentifier: cloudContainerIdentifier,
                           purchases: purchases)
 #endif
@@ -150,25 +143,37 @@ public actor HLLRuntime {
         try widgetStore.write(payload)
         lastPublishedRevision = payload.revision
         lastPublishedAt = now
-        if lastCloudProjectionRevision != payload.revision, let cloudProjection {
-            lastCloudProjectionRevision = payload.revision
-            Task.detached(priority: .utility) {
-                await cloudProjection.write(payload)
-            }
-        }
-        // This projection is portable across the iPhone/watch EventKit
-        // boundary. It is written separately so a watch extension can learn
-        // about synced annotations and user events without opening Core Data.
+        // Only portable settings cross devices. Calendar occurrences remain
+        // in the local App Group snapshot and are read from local EventKit by
+        // each platform's extension.
         let repository = repository
         if let cloudContainerIdentifier, !cloudContainerIdentifier.isEmpty {
             Task.detached(priority: .utility) {
                 guard let shared = try? await repository.sharedSettingsProjection(
                     revision: payload.revision, generatedAt: now) else { return }
-                await HLLSharedSettingsProjectionStore(
-                    containerIdentifier: cloudContainerIdentifier).write(shared)
+                await self.publishSharedSettingsIfChanged(shared,
+                                                          containerIdentifier: cloudContainerIdentifier)
             }
         }
         return true
+    }
+
+    private func publishSharedSettingsIfChanged(_ projection: HLLSharedSettingsProjection,
+                                                containerIdentifier: String) async {
+        if let previous = lastSharedSettingsProjection,
+           previous.revision > projection.revision {
+            return
+        }
+        let unchanged = lastSharedSettingsProjection.map {
+            $0.settings == projection.settings
+                && $0.calendars == projection.calendars
+                && $0.userDefinitions == projection.userDefinitions
+                && $0.annotations == projection.annotations
+        } ?? false
+        guard !unchanged else { return }
+        lastSharedSettingsProjection = projection
+        await HLLSharedSettingsProjectionStore(containerIdentifier: containerIdentifier)
+            .write(projection)
     }
 }
 
