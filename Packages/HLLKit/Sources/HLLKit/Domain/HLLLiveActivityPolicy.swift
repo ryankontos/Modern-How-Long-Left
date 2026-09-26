@@ -5,7 +5,9 @@ public struct HLLLiveActivityPolicy: Identifiable, Codable, Sendable, Equatable 
     public enum Target: Codable, Sendable, Equatable {
         case allEvents
         case calendar(profileID: UUID)
-        case event(id: UUID, portableKey: String?)
+        /// Keep series identity so deleting a repeating personal event can
+        /// remove its device-local automatic tracking rule as well.
+        case event(id: UUID, portableKey: String?, seriesID: String?)
     }
 
     public var id: UUID
@@ -34,7 +36,7 @@ public struct HLLLiveActivityPolicy: Identifiable, Codable, Sendable, Equatable 
         case .allEvents: return true
         case .calendar(let profileID):
             return event.calendarID.flatMap { calendars[$0]?.id } == profileID
-        case .event(let id, let portableKey):
+        case .event(let id, let portableKey, _):
             return event.id == id || (portableKey != nil && event.portableKey == portableKey)
         }
     }

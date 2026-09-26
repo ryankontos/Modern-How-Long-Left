@@ -135,9 +135,10 @@ struct HLLContextMenu: View {
         } else {
             Button("Start Live Activity", systemImage: "play.circle") { model.startActivity(for: event) }
         }
-        Button(model.isAutomaticallyTracking(.event(id: event.id, portableKey: event.portableKey))
+        let target = HLLLiveActivityPolicy.Target.event(
+            id: event.id, portableKey: event.portableKey, seriesID: event.seriesID)
+        Button(model.isAutomaticallyTracking(target)
                ? "Stop automatic tracking" : "Track automatically", systemImage: "clock.badge") {
-            let target = HLLLiveActivityPolicy.Target.event(id: event.id, portableKey: event.portableKey)
             model.setAutomaticTracking(target, enabled: !model.isAutomaticallyTracking(target))
         }
         Button("Pin this event", systemImage: "pin") {

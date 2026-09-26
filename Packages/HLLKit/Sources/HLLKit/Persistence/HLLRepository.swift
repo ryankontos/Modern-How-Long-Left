@@ -67,6 +67,32 @@ public actor HLLRepository {
 
     public func deleteUserEvent(id: UUID) async throws {
         try await database.remove(kind: .userEvent, key: id.uuidString, location: .cloud)
+
+        // A deleted personal event can no longer need hide, pin, or automatic
+        // tracking rules. Remove by the definition's series ID as well as its
+        // direct ID so this also clears rules for generated occurrences.
+        async let cloudAnnotations: [HLLEventAnnotation] = database.all(
+            HLLEventAnnotation.self, kind: .annotation, location: .cloud)
+        async let localAnnotations: [HLLEventAnnotation] = database.all(
+            HLLEventAnnotation.self, kind: .annotation, location: .local)
+        let annotationIDs = Set((try await cloudAnnotations + localAnnotations)
+            .filter { $0.eventID == id || $0.seriesID == id.uuidString }
+            .map(\.id))
+        for annotationID in annotationIDs {
+            try await database.remove(kind: .annotation, key: annotationID.uuidString,
+                                      location: .cloud)
+            try await database.remove(kind: .annotation, key: annotationID.uuidString,
+                                      location: .local)
+        }
+
+        let policies = try await activityPolicies()
+        for policy in policies {
+            guard case .event(let eventID, let portableKey, let seriesID) = policy.target,
+                  eventID == id || portableKey == "user|\(id.uuidString)"
+                    || seriesID == id.uuidString else { continue }
+            try await deleteActivityPolicy(id: policy.id)
+        }
+
         try await touchSharedProjection()
     }
 

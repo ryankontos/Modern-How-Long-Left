@@ -425,7 +425,7 @@
         "INFOPLIST_KEY_CFBundleDisplayName": "HowLongLeftWidgets",
         "INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription": "How Long Left shows calendar events in widgets.",
         "INFOPLIST_KEY_NSHumanReadableCopyright": "",
-        "IPHONEOS_DEPLOYMENT_TARGET": "27.2",
+        "IPHONEOS_DEPLOYMENT_TARGET": "27.0",
         "LD_RUNPATH_SEARCH_PATHS": [
           "$(inherited)",
           "@executable_path/Frameworks",
@@ -504,7 +504,7 @@
         "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
         "SWIFT_VERSION": "6.0",
         "TARGETED_DEVICE_FAMILY": "4",
-        "WATCHOS_DEPLOYMENT_TARGET": "27.2",
+        "WATCHOS_DEPLOYMENT_TARGET": "27.0",
       },
     },
   ],
