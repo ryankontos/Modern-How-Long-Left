@@ -23,6 +23,22 @@ final class HLLAppModel {
     private var boundaryTask: Task<Void, Never>?
 
     func start() {
+        // Render the last atomic projection while the CloudKit mirror opens.
+        // This keeps first paint independent of network and Core Data setup.
+        let cachedEvents = Task.detached(priority: .userInitiated) {
+            let payload = HLLWidgetSnapshotStore(groupIdentifier: "group.com.ryan.HowLongLeft").read()
+            return payload?.query(HLLEventQuery(
+                interval: DateInterval(start: .now.addingTimeInterval(-86_400),
+                                       end: .now.addingTimeInterval(30 * 86_400)),
+                rule: .upcoming(.now), context: "home.main"))
+        }
+        Task { [weak self] in
+            guard let events = await cachedEvents.value else { return }
+            await MainActor.run {
+                guard let self, self.isLoading else { return }
+                self.events = events
+            }
+        }
         Task { [weak self] in
             do {
                 let runtime = try await HLLRuntime.shared(

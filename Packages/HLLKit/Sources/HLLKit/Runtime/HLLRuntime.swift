@@ -6,18 +6,22 @@ public actor HLLRuntime {
     public let repository: HLLRepository
     public let engine: HLLEventEngine
     public let widgetStore: HLLWidgetSnapshotStore
+    public let cloudProjection: HLLCloudProjectionStore?
 #if os(iOS)
     public let liveActivities: HLLLiveActivityCoordinator
 #endif
     private var lastPublishedRevision: UInt64?
     private var lastPublishedAt: Date?
+    private var lastCloudProjectionRevision: UInt64?
 
     private init(eventKit: HLLEventKitSource, repository: HLLRepository,
-                 engine: HLLEventEngine, widgetStore: HLLWidgetSnapshotStore) {
+                 engine: HLLEventEngine, widgetStore: HLLWidgetSnapshotStore,
+                 cloudProjection: HLLCloudProjectionStore?) {
         self.eventKit = eventKit
         self.repository = repository
         self.engine = engine
         self.widgetStore = widgetStore
+        self.cloudProjection = cloudProjection
 #if os(iOS)
         self.liveActivities = HLLLiveActivityCoordinator(engine: engine, repository: repository)
 #endif
@@ -60,7 +64,8 @@ public actor HLLRuntime {
         let identities = HLLIdentityResolver(database: database)
         let engine = HLLEventEngine(eventKit: eventKit, repository: repository, identities: identities)
         return HLLRuntime(eventKit: eventKit, repository: repository, engine: engine,
-                          widgetStore: HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier))
+                          widgetStore: HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier),
+                          cloudProjection: HLLCloudProjectionStore(containerIdentifier: cloudContainerIdentifier))
     }
 
     /// Call after source or settings changes. Timeline reloads are requested by the app target.
@@ -76,6 +81,12 @@ public actor HLLRuntime {
         try widgetStore.write(payload)
         lastPublishedRevision = payload.revision
         lastPublishedAt = now
+        if lastCloudProjectionRevision != payload.revision, let cloudProjection {
+            lastCloudProjectionRevision = payload.revision
+            Task.detached(priority: .utility) {
+                await cloudProjection.write(payload)
+            }
+        }
         return true
     }
 }

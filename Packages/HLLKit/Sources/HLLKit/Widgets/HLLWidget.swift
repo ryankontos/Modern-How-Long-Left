@@ -39,10 +39,13 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
 
     private let contextID: HLLContextID
     private let groupIdentifier: String
+    private let cloudContainerIdentifier: String?
 
-    public init(contextID: HLLContextID, groupIdentifier: String) {
+    public init(contextID: HLLContextID, groupIdentifier: String,
+                cloudContainerIdentifier: String?) {
         self.contextID = contextID
         self.groupIdentifier = groupIdentifier
+        self.cloudContainerIdentifier = cloudContainerIdentifier
     }
 
     /// watchOS requires this method; an empty list leaves configuration to the user.
@@ -67,8 +70,10 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
 
     private func entries(for configuration: HLLWidgetConfigurationIntent) async -> [HLLWidgetEntry] {
         let now = Date()
-        let payload = await HLLExtensionSnapshotLoader().load(groupIdentifier: groupIdentifier,
-                                                               now: now)
+        let payload = await HLLExtensionSnapshotLoader().load(
+            groupIdentifier: groupIdentifier,
+            cloudContainerIdentifier: cloudContainerIdentifier,
+            now: now)
         let mode = configuration.mode
         let selectedID = configuration.event?.id
         let includeAllDay = configuration.includeAllDay
@@ -93,6 +98,7 @@ public struct HLLWidget: Widget {
     private let kind: String
     private let contextID: HLLContextID
     private let groupIdentifier: String
+    private let cloudContainerIdentifier: String?
     private let families: [WidgetFamily]
 
     public init() {
@@ -106,17 +112,20 @@ public struct HLLWidget: Widget {
     }
 
     public init(kind: String, contextID: HLLContextID, groupIdentifier: String,
+                cloudContainerIdentifier: String? = nil,
                 families: [WidgetFamily]) {
         self.kind = kind
         self.contextID = contextID
         self.groupIdentifier = groupIdentifier
+        self.cloudContainerIdentifier = cloudContainerIdentifier
         self.families = families
     }
 
     public var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: kind, intent: HLLWidgetConfigurationIntent.self,
                                provider: HLLWidgetProvider(contextID: contextID,
-                                                           groupIdentifier: groupIdentifier)) { entry in
+                                                           groupIdentifier: groupIdentifier,
+                                                           cloudContainerIdentifier: cloudContainerIdentifier)) { entry in
             HLLWidgetEventView(events: entry.events, date: entry.date, style: entry.style)
         }
         .configurationDisplayName("How Long Left")

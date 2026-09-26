@@ -5,25 +5,29 @@ import Foundation
 public struct HLLExtensionSnapshotLoader: Sendable {
     public init() {}
 
-    public func load(groupIdentifier: String, now: Date = .now) async -> HLLWidgetPayload? {
+    public func load(groupIdentifier: String, cloudContainerIdentifier: String? = nil,
+                     now: Date = .now) async -> HLLWidgetPayload? {
         let cached = HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier).read()
+        let cloud = await cloudProjection(cloudContainerIdentifier)
+        let seed = [cached, cloud].compactMap { $0 }
+            .max { $0.generatedAt < $1.generatedAt }
         let source = HLLEventKitSource()
         let interval = DateInterval(start: now.addingTimeInterval(-86_400),
                                     end: now.addingTimeInterval(14 * 86_400))
         let authorized = await source.authorizationStatus() == .fullAccess
-        guard authorized else { return expandUserEvents(in: cached, interval: interval, now: now) }
+        guard authorized else { return expandUserEvents(in: seed, interval: interval, now: now) }
 
         let raw = await source.events(in: interval)
-        let existingByPortable = Dictionary((cached?.events ?? []).compactMap { event in
+        let existingByPortable = Dictionary((seed?.events ?? []).compactMap { event in
             event.portableKey.map { ($0, event) }
         }, uniquingKeysWith: { first, _ in first })
-        let existingByFingerprint = Dictionary(grouping: (cached?.events ?? []).filter {
+        let existingByFingerprint = Dictionary(grouping: (seed?.events ?? []).filter {
             $0.source == .eventKit
         }, by: fingerprint)
         var normalized: [HLLEvent] = []
         normalized.reserveCapacity(raw.count)
         for event in raw {
-            let profile = cached?.calendars[event.calendarLocalID]
+            let profile = seed?.calendars[event.calendarLocalID]
             let occurrence = String(event.occurrenceStart.timeIntervalSince1970)
             let portable = event.externalID.flatMap { external in
                 profile.map { "\($0.id.uuidString)|\(external)|\(occurrence)" }
@@ -43,12 +47,27 @@ public struct HLLExtensionSnapshotLoader: Sendable {
                                        occurrenceStart: event.occurrenceStart,
                                        location: event.location, notes: event.notes))
         }
-        let user = userOccurrences(from: cached, in: interval)
-        return HLLWidgetPayload(revision: cached?.revision ?? 0, generatedAt: now,
+        let user = userOccurrences(from: seed, in: interval)
+        return HLLWidgetPayload(revision: seed?.revision ?? 0, generatedAt: now,
                                 expiresAt: interval.end, events: normalized + user,
-                                userDefinitions: cached?.userDefinitions ?? [],
-                                calendars: cached?.calendars ?? [:],
-                                annotations: cached?.annotations ?? [])
+                                userDefinitions: seed?.userDefinitions ?? [],
+                                calendars: seed?.calendars ?? [:],
+                                annotations: seed?.annotations ?? [])
+    }
+
+    private func cloudProjection(_ identifier: String?) async -> HLLWidgetPayload? {
+        guard let identifier, !identifier.isEmpty else { return nil }
+        // CloudKit must not consume a widget's whole timeline budget offline.
+        return await withTaskGroup(of: HLLWidgetPayload?.self) { group in
+            group.addTask { await HLLCloudProjectionStore(containerIdentifier: identifier).read() }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(1.5))
+                return nil
+            }
+            let value = await group.next() ?? nil
+            group.cancelAll()
+            return value
+        }
     }
 
     private func expandUserEvents(in cached: HLLWidgetPayload?, interval: DateInterval,

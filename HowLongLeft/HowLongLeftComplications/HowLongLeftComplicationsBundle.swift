@@ -14,6 +14,7 @@ struct HowLongLeftComplicationsBundle: WidgetBundle {
     var body: some Widget {
         HLLWidget(kind: "HowLongLeftComplications", contextID: "complication.default",
                   groupIdentifier: "group.com.ryan.HowLongLeft",
+                  cloudContainerIdentifier: "iCloud.com.ryan.HowLongLeft",
                   families: [.accessoryInline, .accessoryCircular, .accessoryRectangular])
     }
 }
