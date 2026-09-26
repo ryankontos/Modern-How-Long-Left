@@ -61,9 +61,13 @@ public struct HLLWidgetTimelinePlanner: Sendable {
         // Keep only points where the chosen event or its countdown target
         // changes. This preserves starts and ends while collapsing irrelevant
         // transitions from a busy calendar.
+        let maximumEntries = 96
         var structural: [HLLWidgetTimelinePoint] = []
         var lastSignature: [String]?
         for date in ([now] + Array(transitions)).sorted() {
+            // Once the useful timeline budget is full, later boundaries are
+            // already outside the entries we can publish for this refresh.
+            if structural.count == maximumEntries { break }
             let events = selectedEvents(at: date)
             let signature = events.map {
                 "\($0.id.uuidString)|\($0.countdownDate(at: date)?.timeIntervalSince1970 ?? -1)"
@@ -74,7 +78,6 @@ public struct HLLWidgetTimelinePlanner: Sendable {
             }
         }
 
-        let maximumEntries = 96
         if !updateProgress || structural.count >= maximumEntries {
             return Array(structural.prefix(maximumEntries))
         }

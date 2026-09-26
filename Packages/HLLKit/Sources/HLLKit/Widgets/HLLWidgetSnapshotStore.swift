@@ -47,12 +47,26 @@ public struct HLLWidgetPayload: Codable, Sendable {
     /// widgets the most useful nearby data when a calendar is unusually busy.
     public func limitingEvents(to limit: Int = HLLWidgetPayload.maxProjectionEvents) -> Self {
         guard limit > 0, events.count > limit else { return self }
+        var pinnedEventIDs = Set<UUID>()
+        var pinnedSeriesIDs = Set<String>()
+        var pinnedPortableKeys = Set<String>()
+        for annotation in annotations where annotation.kind == .pinned {
+            switch annotation.scope {
+            case .occurrence:
+                if let eventID = annotation.eventID { pinnedEventIDs.insert(eventID) }
+                if let portableKey = annotation.portableKey { pinnedPortableKeys.insert(portableKey) }
+            case .series:
+                if let seriesID = annotation.seriesID { pinnedSeriesIDs.insert(seriesID) }
+            }
+        }
         let pinned = events.filter { event in
-            annotations.contains { $0.kind == .pinned && $0.applies(to: event) }
+            pinnedEventIDs.contains(event.id)
+                || (event.portableKey.map(pinnedPortableKeys.contains) ?? false)
+                || (event.seriesID.map(pinnedSeriesIDs.contains) ?? false)
         }.sorted(by: Self.eventOrder)
-        let unpinned = events.filter { event in
-            !pinned.contains(where: { $0.id == event.id })
-        }.sorted(by: Self.eventOrder)
+        let pinnedIDs = Set(pinned.map(\.id))
+        let unpinned = events.filter { !pinnedIDs.contains($0.id) }
+            .sorted(by: Self.eventOrder)
         let selected = Array((pinned + unpinned).prefix(limit))
         return Self(revision: revision, generatedAt: generatedAt, expiresAt: expiresAt,
                     events: selected, userDefinitions: userDefinitions,
