@@ -26,6 +26,18 @@ public struct HLLWidgetConfigurationIntent: WidgetConfigurationIntent {
     @Parameter(title: "Number of Events", default: 3)
     public var count: Int
 
+    /// Keep the option order predictable on both iPhone and watch.
+    public static var parameterSummary: some ParameterSummary {
+        Summary {
+            \.$mode
+            \.$includeAllDay
+            \.$event
+            \.$sortOrder
+            \.$style
+            \.$count
+        }
+    }
+
     public init() {}
 }
 
@@ -66,7 +78,9 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
         self.requiredFeature = requiredFeature
     }
 
-    /// watchOS requires this method; an empty list leaves configuration to the user.
+    /// watchOS 27 lets people configure complication intents directly. An
+    /// empty list avoids preset suggestions; the intent still exposes every
+    /// setting above in the system's configuration editor.
     public func recommendations() -> [AppIntentRecommendation<HLLWidgetConfigurationIntent>] { [] }
 
     public func placeholder(in context: Context) -> HLLWidgetEntry {

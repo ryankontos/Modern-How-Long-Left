@@ -59,9 +59,6 @@ private struct WatchEventListView: View {
                         NavigationLink(value: event.id) {
                             WatchEventCard(event: event)
                         }
-                        .contextMenu(menuItems: {
-                            WatchEventActions(event: event, model: model)
-                        })
                     }
                     .listStyle(.carousel)
                 }
@@ -152,10 +149,7 @@ private struct WatchEventDetailView: View {
                 if let notes = event.notes, !notes.isEmpty {
                     Text(notes).font(.footnote).foregroundStyle(.secondary)
                 }
-                Button("Hide this event", systemImage: "eye.slash") {
-                    model.annotate(event, kind: .hidden, scope: .occurrence)
-                }
-                .buttonStyle(.bordered)
+                WatchEventActions(event: event, model: model)
             }
             .padding(.horizontal)
         }
@@ -168,21 +162,22 @@ private struct WatchEventActions: View {
     let model: WatchEventModel
 
     var body: some View {
-        Button("Pin this event", systemImage: "pin") {
-            model.annotate(event, kind: .pinned, scope: .occurrence)
-        }
-        Button("Hide this event", systemImage: "eye.slash") {
-            model.annotate(event, kind: .hidden, scope: .occurrence)
-        }
-        if event.seriesID != nil {
-            Button("Hide this series", systemImage: "eye.slash.fill") {
-                model.annotate(event, kind: .hidden, scope: .series)
+        VStack(alignment: .leading, spacing: 8) {
+            Button("Pin this event", systemImage: "pin") {
+                model.annotate(event, kind: .pinned, scope: .occurrence)
             }
-        }
-        if event.source == .user {
-            Divider()
-            Button("Delete personal event", systemImage: "trash", role: .destructive) {
-                model.deleteUserEvent(event)
+            Button("Hide this event", systemImage: "eye.slash") {
+                model.annotate(event, kind: .hidden, scope: .occurrence)
+            }
+            if event.seriesID != nil {
+                Button("Hide this series", systemImage: "eye.slash.fill") {
+                    model.annotate(event, kind: .hidden, scope: .series)
+                }
+            }
+            if event.source == .user {
+                Button("Delete personal event", systemImage: "trash", role: .destructive) {
+                    model.deleteUserEvent(event)
+                }
             }
         }
     }

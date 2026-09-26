@@ -27,6 +27,9 @@ final class WatchEventModel {
     private var purchaseTask: Task<Void, Never>?
     private var boundaryTask: Task<Void, Never>?
     private var sourceChangeTask: Task<Void, Never>?
+    /// A newer refresh wins if multiple classification tasks overlap.
+    private var classificationGeneration: UInt64 = 0
+    private var hasLoadedAuthoritativeSnapshot = false
     private var hasStarted = false
 
     func event(withID id: UUID) -> HLLEvent? { events.first { $0.id == id } }
@@ -52,7 +55,8 @@ final class WatchEventModel {
         Task { [weak self] in
             guard let snapshot = await quickSnapshot.value,
                   let self, self.isLoading else { return }
-            self.apply(snapshot.events, at: .now)
+            guard !self.hasLoadedAuthoritativeSnapshot,
+                  await self.apply(snapshot.events, at: .now) else { return }
             self.calendars = snapshot.calendars.map { ($0.id.uuidString, $0) }
             self.hiddenAnnotations = snapshot.hiddenAnnotations
             self.isLoading = false
@@ -158,11 +162,12 @@ final class WatchEventModel {
             // Reuse the metadata the engine already needed to compose events.
             // This removes two duplicate reads from every watch refresh.
             let result = try await runtime.engine.queryResult(query, now: now)
+            hasLoadedAuthoritativeSnapshot = true
+            guard await apply(result.snapshot.events, at: now) else { return }
             calendars = result.calendars.map { (id: $0.localID, preference: $0.preference) }
             hiddenAnnotations = result.annotations.filter { $0.kind == .hidden }
             notificationPreferences = try await runtime.repository.notificationPreferences()
             needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
-            apply(result.snapshot.events, at: now)
             isLoading = false
             if try await runtime.publishWidgetSnapshot() {
                 WidgetCenter.shared.reloadTimelines(ofKind: "HowLongLeftComplications")
@@ -176,21 +181,28 @@ final class WatchEventModel {
 
     /// Reclassify in memory at the next start/end; never reopen a database just
     /// because wall-clock time crossed an event boundary.
-    private func apply(_ newEvents: [HLLEvent], at date: Date) {
+    private func apply(_ newEvents: [HLLEvent], at date: Date) async -> Bool {
+        classificationGeneration &+= 1
+        let generation = classificationGeneration
+        // Keep array filtering and boundary scans away from the watch UI actor.
+        let classification = await Task.detached(priority: .userInitiated) {
+            HLLEventClassification(events: newEvents, at: date)
+        }.value
+        guard generation == classificationGeneration else { return false }
         events = newEvents
-        currentEvents = newEvents.filter { $0.status(at: date) == .inProgress }
-        upcomingEvents = newEvents.filter { $0.status(at: date) == .upcoming }
-        scheduleNextBoundary(after: date)
+        currentEvents = classification.current
+        upcomingEvents = classification.upcoming
+        scheduleNextBoundary(classification.nextBoundary, classifiedAt: date)
+        return true
     }
 
-    private func scheduleNextBoundary(after date: Date) {
+    private func scheduleNextBoundary(_ next: Date?, classifiedAt date: Date) {
         boundaryTask?.cancel()
-        guard let next = events.lazy.flatMap({ [$0.start, $0.end] })
-            .filter({ $0 > date }).min() else { return }
+        guard let next else { return }
         boundaryTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(max(0.1, next.timeIntervalSinceNow + 0.05)))
+            try? await Task.sleep(for: .seconds(max(0.1, next.timeIntervalSince(date) + 0.05)))
             guard !Task.isCancelled, let self else { return }
-            self.apply(self.events, at: .now)
+            _ = await self.apply(self.events, at: .now)
         }
     }
 

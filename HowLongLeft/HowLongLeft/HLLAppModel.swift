@@ -33,6 +33,9 @@ final class HLLAppModel {
     private var purchaseTask: Task<Void, Never>?
     private var boundaryTask: Task<Void, Never>?
     private var sourceChangeTask: Task<Void, Never>?
+    /// Stops an older off-main-actor classification from replacing fresh data.
+    private var classificationGeneration: UInt64 = 0
+    private var hasLoadedAuthoritativeSnapshot = false
     private var hasStarted = false
 
     func event(withID id: UUID) -> HLLEvent? {
@@ -64,8 +67,9 @@ final class HLLAppModel {
         }
         Task { [weak self] in
             guard let snapshot = await quickSnapshot.value else { return }
-            guard let self, self.isLoading else { return }
-            self.apply(snapshot.events, at: .now)
+            guard let self, self.isLoading,
+                  !self.hasLoadedAuthoritativeSnapshot else { return }
+            guard await self.apply(snapshot.events, at: .now) else { return }
             self.calendars = snapshot.calendars.map { ($0.id.uuidString, $0) }
             self.hiddenAnnotations = snapshot.hiddenAnnotations
             self.isLoading = false
@@ -185,7 +189,8 @@ final class HLLAppModel {
             // This result already contains the calendars and annotations used
             // to compose the list, so the UI never repeats those database reads.
             let result = try await runtime.engine.queryResult(query, now: now)
-            apply(result.snapshot.events, at: now)
+            hasLoadedAuthoritativeSnapshot = true
+            guard await apply(result.snapshot.events, at: now) else { return }
             calendars = result.calendars.map { (id: $0.localID, preference: $0.preference) }
             hiddenAnnotations = result.annotations.filter { $0.kind == .hidden }
             annotationSyncEnabled = try await runtime.repository.settings().syncEventAnnotations
@@ -207,21 +212,30 @@ final class HLLAppModel {
 
     /// A clock boundary only changes classification. Reusing the loaded values
     /// avoids reopening EventKit and the database when an event starts or ends.
-    private func apply(_ newEvents: [HLLEvent], at date: Date) {
+    private func apply(_ newEvents: [HLLEvent], at date: Date) async -> Bool {
+        classificationGeneration &+= 1
+        let generation = classificationGeneration
+        // Filtering thousands of values must not compete with scrolling or
+        // animation on the main actor. HLLEventClassification is pure data.
+        let classification = await Task.detached(priority: .userInitiated) {
+            HLLEventClassification(events: newEvents, at: date)
+        }.value
+        guard generation == classificationGeneration else { return false }
         events = newEvents
-        currentEvents = newEvents.filter { $0.status(at: date) == .inProgress }
-        upcomingEvents = newEvents.filter { $0.status(at: date) == .upcoming }
-        scheduleNextBoundary(now: date)
+        currentEvents = classification.current
+        upcomingEvents = classification.upcoming
+        scheduleNextBoundary(classification.nextBoundary, classifiedAt: date)
+        return true
     }
 
-    private func scheduleNextBoundary(now: Date) {
+    private func scheduleNextBoundary(_ next: Date?, classifiedAt date: Date) {
         boundaryTask?.cancel()
-        guard let next = events.flatMap({ [$0.start, $0.end] }).filter({ $0 > now }).min() else { return }
+        guard let next else { return }
         boundaryTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(max(1, next.timeIntervalSince(now) + 0.1)))
+            try? await Task.sleep(for: .seconds(max(1, next.timeIntervalSince(date) + 0.1)))
             guard !Task.isCancelled else { return }
             guard let self else { return }
-            self.apply(self.events, at: .now)
+            _ = await self.apply(self.events, at: .now)
         }
     }
 
