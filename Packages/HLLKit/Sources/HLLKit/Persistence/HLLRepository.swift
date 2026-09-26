@@ -29,12 +29,12 @@ public actor HLLRepository {
 
     public func widgetDefaults() async throws -> HLLWidgetDefaults {
         let values: [HLLWidgetDefaults] = try await database.all(
-            HLLWidgetDefaults.self, kind: .preference, location: .cloud)
+            HLLWidgetDefaults.self, kind: .widgetDefaults, location: .cloud)
         return values.first ?? HLLWidgetDefaults()
     }
 
     public func save(_ defaults: HLLWidgetDefaults) async throws {
-        try await database.put(defaults, kind: .preference,
+        try await database.put(defaults, kind: .widgetDefaults,
                                key: "widget-defaults", location: .cloud)
     }
 

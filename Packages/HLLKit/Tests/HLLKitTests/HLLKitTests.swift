@@ -61,6 +61,23 @@ import Testing
     #expect(loaded.isVisible(in: "new.context"))
 }
 
+@Test func appSettingsAndWidgetDefaultsStayTypeSafe() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try await HLLDatabase.open(directory: directory, cloudContainerIdentifier: nil)
+    let repository = HLLRepository(database: database)
+
+    var settings = HLLAppSettings()
+    settings.syncEventAnnotations = false
+    try await repository.save(settings)
+    let defaults = HLLWidgetDefaults(mode: .all, style: .progress,
+                                      includeAllDay: false, eventCount: 4)
+    try await repository.save(defaults)
+
+    #expect(try await repository.settings().syncEventAnnotations == false)
+    #expect(try await repository.widgetDefaults() == defaults)
+}
+
 @Test func recurrenceHandlesWeekAlignmentAndMonthEnd() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
