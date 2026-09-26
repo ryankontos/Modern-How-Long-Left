@@ -41,7 +41,7 @@ The model uses scalar indexed keys and an encoded payload so CloudKit records re
 
 Maintenance is bounded and infrequent: expired occurrence annotations, old local identity aliases, duplicate logical rows, and safely exported persistent history are removed during a background maintenance pass no more than monthly. The App Group file is a single replacement snapshot, so it does not accumulate one file per refresh.
 
-The app also writes the latest extension projection to one replaceable private CloudKit record. Extensions try that record with a short timeout and select the newest result between CloudKit and the local App Group snapshot. If the account is offline or unavailable, the local snapshot remains usable.
+The app also writes the latest extension projection to one replaceable private CloudKit record. Extensions try that record with a short timeout and select the newest result between CloudKit and the local App Group snapshot. Shared profiles, user definitions, and annotations are merged by record ID and `updatedAt`, so a newer cross-device overlay cannot erase a device-local hidden event. If the account is offline or unavailable, the local snapshot remains usable. The iOS target enables CloudKit remote-notification delivery and refreshes this projection during a background push, so a scene does not need to be opened for a synced change to reach WidgetKit.
 
 A second small CloudKit record contains only portable shared settings: synced user-event definitions, calendar profiles and visibility, and portable hidden/pinned annotations. iOS and watchOS merge this overlay with their own EventKit projection, so a complication can learn about a cross-device setting change without importing the other platform's calendar IDs.
 
