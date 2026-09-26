@@ -38,6 +38,17 @@ public actor HLLRepository {
                                key: "widget-defaults", location: .cloud)
     }
 
+    public func notificationPreferences() async throws -> HLLNotificationPreferences {
+        let values: [HLLNotificationPreferences] = try await database.all(
+            HLLNotificationPreferences.self, kind: .notificationPreferences, location: .local)
+        return values.first ?? HLLNotificationPreferences()
+    }
+
+    public func save(_ preferences: HLLNotificationPreferences) async throws {
+        try await database.put(preferences, kind: .notificationPreferences,
+                               key: "notifications", location: .local)
+    }
+
     public func userEvents() async throws -> [HLLUserEvent] {
         try await database.all(HLLUserEvent.self, kind: .userEvent, location: .cloud)
     }

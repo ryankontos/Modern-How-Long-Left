@@ -7,6 +7,19 @@ import UserNotifications
 /// widgets and Live Activities. The service is safe to call repeatedly: every
 /// request has a deterministic identifier and replaces the previous request.
 public actor HLLNotificationScheduler {
+    public struct ScheduleOptions: Sendable, Equatable {
+        public let notifyAtStart: Bool
+        public let notifyAtEnd: Bool
+        public let includeAllDay: Bool
+
+        public init(notifyAtStart: Bool = true, notifyAtEnd: Bool = true,
+                    includeAllDay: Bool = false) {
+            self.notifyAtStart = notifyAtStart
+            self.notifyAtEnd = notifyAtEnd
+            self.includeAllDay = includeAllDay
+        }
+    }
+
     private let center: UNUserNotificationCenter
     private let purchases: HLLPurchaseCoordinator
     private let identifierPrefix: String
@@ -74,22 +87,25 @@ public actor HLLNotificationScheduler {
     /// Reconciles a caller-provided visible event set. Hidden events never
     /// reach this method because the main engine performs annotation filtering
     /// before it hands the list to the scheduler.
-    public func reconcile(events: [HLLEvent]) async throws {
+    public func reconcile(events: [HLLEvent], options: ScheduleOptions = .init()) async throws {
         guard await purchases.isUnlocked(.notifications) else {
             await cancelAllManagedRequests()
             return
         }
+        let visibleEvents = events.filter { options.includeAllDay || !$0.isAllDay }
         let requests = await center.pendingNotificationRequests()
             .filter { $0.identifier.hasPrefix(identifierPrefix) }
-        let desired = Set(events.flatMap { [
-            identifier(for: $0, kind: "start"),
-            identifier(for: $0, kind: "end")
-        ] })
+        let desired = Set(visibleEvents.flatMap { event in
+            var identifiers: [String] = []
+            if options.notifyAtStart { identifiers.append(identifier(for: event, kind: "start")) }
+            if options.notifyAtEnd { identifiers.append(identifier(for: event, kind: "end")) }
+            return identifiers
+        })
         let stale = requests.map(\.identifier).filter { !desired.contains($0) }
         center.removePendingNotificationRequests(withIdentifiers: stale)
-        for event in events {
-            try await scheduleStart(for: event)
-            try await scheduleEnd(for: event)
+        for event in visibleEvents {
+            if options.notifyAtStart { try await scheduleStart(for: event) }
+            if options.notifyAtEnd { try await scheduleEnd(for: event) }
         }
     }
 

@@ -46,6 +46,14 @@ struct SettingsView: View {
                                        tint: .orange)
                     }
                     NavigationLink {
+                        NotificationSettingsView(model: model)
+                    } label: {
+                        HLLSettingsRow(title: "Notifications",
+                                       subtitle: "Schedule start and end alerts",
+                                       systemImage: "bell",
+                                       tint: .red)
+                    }
+                    NavigationLink {
                         HiddenEventsView(model: model)
                     } label: {
                         HLLSettingsRow(title: "Hidden Events",
@@ -324,6 +332,81 @@ private struct ActivitySettingsView: View {
             }
         }
         .navigationTitle("Live Activities")
+    }
+}
+
+private struct NotificationSettingsView: View {
+    let model: HLLAppModel
+
+    var body: some View {
+        List {
+            Section {
+                Text("Notifications are derived from the same filtered event snapshot used by the app. Hidden events and calendars that are not visible in the app are never scheduled.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if !model.isFeatureUnlocked(.notifications) {
+                    Label("Notifications are a Premium feature.", systemImage: "lock.fill")
+                        .foregroundStyle(.orange)
+                        .font(.footnote)
+                }
+            }
+
+            Section("Schedule") {
+                Toggle("Enable notifications", isOn: enabledBinding)
+                    .disabled(!model.isFeatureUnlocked(.notifications))
+                Toggle("At event start", isOn: notifyAtStartBinding)
+                    .disabled(!canEditRules)
+                Toggle("At event end", isOn: notifyAtEndBinding)
+                    .disabled(!canEditRules)
+                Toggle("Include all-day events", isOn: includeAllDayBinding)
+                    .disabled(!canEditRules)
+            }
+
+            Section {
+                Text("Changing these options reconciles pending requests immediately. If access is denied in system settings, turn notifications on again there before enabling them here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Notifications")
+    }
+
+    private var canEditRules: Bool {
+        model.isFeatureUnlocked(.notifications) && model.notificationPreferences.enabled
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { model.notificationPreferences.enabled },
+            set: { newValue in update { $0.enabled = newValue } }
+        )
+    }
+
+    private var notifyAtStartBinding: Binding<Bool> {
+        Binding(
+            get: { model.notificationPreferences.notifyAtStart },
+            set: { newValue in update { $0.notifyAtStart = newValue } }
+        )
+    }
+
+    private var notifyAtEndBinding: Binding<Bool> {
+        Binding(
+            get: { model.notificationPreferences.notifyAtEnd },
+            set: { newValue in update { $0.notifyAtEnd = newValue } }
+        )
+    }
+
+    private var includeAllDayBinding: Binding<Bool> {
+        Binding(
+            get: { model.notificationPreferences.includeAllDay },
+            set: { newValue in update { $0.includeAllDay = newValue } }
+        )
+    }
+
+    private func update(_ change: (inout HLLNotificationPreferences) -> Void) {
+        var preferences = model.notificationPreferences
+        change(&preferences)
+        model.setNotificationPreferences(preferences)
     }
 }
 

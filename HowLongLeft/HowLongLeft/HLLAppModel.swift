@@ -3,6 +3,7 @@ import Foundation
 import HLLKit
 import Observation
 import UIKit
+import UserNotifications
 import WidgetKit
 
 /// The main actor owns presentation state. HLLKit actors do source and disk work.
@@ -14,6 +15,7 @@ final class HLLAppModel {
     var annotationSyncEnabled = true
     var activityPolicies: [HLLLiveActivityPolicy] = []
     var widgetDefaults = HLLWidgetDefaults()
+    var notificationPreferences = HLLNotificationPreferences()
     var activeActivityEventKeys: Set<String> = []
     var purchaseSnapshot = HLLPurchaseSnapshot.locked(configuration: .shipping)
     var purchaseProducts: [HLLStoreProduct] = []
@@ -114,6 +116,7 @@ final class HLLAppModel {
                     self.purchaseSnapshot = snapshot
                     WidgetCenter.shared.reloadAllTimelines()
                     await self.reconcileLiveActivities(using: runtime)
+                    await self.reconcileNotifications(using: runtime)
                 }
             }
         }
@@ -182,6 +185,7 @@ final class HLLAppModel {
             annotationSyncEnabled = try await runtime.repository.settings().syncEventAnnotations
             activityPolicies = try await runtime.repository.activityPolicies()
             widgetDefaults = try await runtime.repository.widgetDefaults()
+            notificationPreferences = try await runtime.repository.notificationPreferences()
             needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
             isLoading = false
             scheduleNextBoundary(now: now)
@@ -189,6 +193,7 @@ final class HLLAppModel {
                 WidgetCenter.shared.reloadTimelines(ofKind: "HowLongLeftWidgets")
             }
             await reconcileLiveActivities(using: runtime)
+            await reconcileNotifications(using: runtime)
         } catch {
             errorMessage = error.localizedDescription
             isLoading = false
@@ -291,6 +296,32 @@ final class HLLAppModel {
         }
     }
 
+    func setNotificationPreferences(_ preferences: HLLNotificationPreferences) {
+        guard let runtime else { return }
+        guard !preferences.enabled || isFeatureUnlocked(.notifications) else {
+            purchaseErrorMessage = "Notifications are available with How Long Left Premium."
+            return
+        }
+        Task {
+            do {
+                if preferences.enabled {
+                    guard try await runtime.notifications.requestAuthorization() else {
+                        notificationPreferences.enabled = false
+                        errorMessage = "Notifications are disabled in Settings."
+                        return
+                    }
+                }
+                var saved = preferences
+                saved.updatedAt = .now
+                try await runtime.repository.save(saved)
+                notificationPreferences = saved
+                await reconcileNotifications(using: runtime)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func startActivity(for event: HLLEvent) {
         guard let runtime else { return }
         guard isFeatureUnlocked(.liveActivities) else {
@@ -350,5 +381,18 @@ final class HLLAppModel {
             try await runtime.liveActivities.reconcile(mayStart: mayStart)
             activeActivityEventKeys = await runtime.liveActivities.activeEventKeys()
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func reconcileNotifications(using runtime: HLLRuntime) async {
+        let options = HLLNotificationScheduler.ScheduleOptions(
+            notifyAtStart: notificationPreferences.notifyAtStart,
+            notifyAtEnd: notificationPreferences.notifyAtEnd,
+            includeAllDay: notificationPreferences.includeAllDay)
+        do {
+            let visibleEvents = notificationPreferences.enabled ? self.events : []
+            try await runtime.notifications.reconcile(events: visibleEvents, options: options)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

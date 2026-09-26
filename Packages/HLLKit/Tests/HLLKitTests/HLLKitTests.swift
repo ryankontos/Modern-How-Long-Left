@@ -76,6 +76,14 @@ import Testing
 
     #expect(try await repository.settings().syncEventAnnotations == false)
     #expect(try await repository.widgetDefaults() == defaults)
+
+    let notifications = HLLNotificationPreferences(enabled: true,
+                                                     notifyAtStart: true,
+                                                     notifyAtEnd: false,
+                                                     includeAllDay: true,
+                                                     context: "notifications.main")
+    try await repository.save(notifications)
+    #expect(try await repository.notificationPreferences() == notifications)
 }
 
 @Test func sharedProjectionKeepsPortableDataOnly() async throws {
