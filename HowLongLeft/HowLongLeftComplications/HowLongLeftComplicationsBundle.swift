@@ -17,5 +17,6 @@ struct HowLongLeftComplicationsBundle: WidgetBundle {
                   cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier,
                   families: [.accessoryInline, .accessoryCircular, .accessoryRectangular],
                   requiredFeature: .complications)
+        HLLRelevantEventsWidget()
     }
 }

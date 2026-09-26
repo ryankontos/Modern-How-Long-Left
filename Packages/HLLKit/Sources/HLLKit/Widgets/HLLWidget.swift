@@ -78,7 +78,7 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
         self.requiredFeature = requiredFeature
     }
 
-    /// watchOS 27 lets people configure complication intents directly. An
+    /// watchOS 26 and later let people configure complication intents directly. An
     /// empty list avoids preset suggestions; the intent still exposes every
     /// setting above in the system's configuration editor.
     public func recommendations() -> [AppIntentRecommendation<HLLWidgetConfigurationIntent>] { [] }
