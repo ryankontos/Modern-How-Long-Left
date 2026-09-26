@@ -159,23 +159,17 @@ public actor HLLRuntime {
         // Only portable settings cross devices. Calendar occurrences remain
         // in the local App Group snapshot and are read from local EventKit by
         // each platform's extension.
-        let repository = repository
-        if let cloudContainerIdentifier, !cloudContainerIdentifier.isEmpty {
-            Task.detached(priority: .utility) {
-                guard let shared = try? await repository.sharedSettingsProjection(
-                    revision: payload.revision, generatedAt: generatedAt) else { return }
-                await self.publishSharedSettingsIfChanged(shared,
-                                                          containerIdentifier: cloudContainerIdentifier)
-            }
-        }
-    }
+        guard let cloudContainerIdentifier, !cloudContainerIdentifier.isEmpty,
+              let projection = try? await repository.sharedSettingsProjection(
+                revision: payload.revision, generatedAt: generatedAt,
+                calendars: Array(payload.calendars.values),
+                userDefinitions: payload.userDefinitions,
+                annotations: payload.annotations) else { return }
 
-    private func publishSharedSettingsIfChanged(_ projection: HLLSharedSettingsProjection,
-                                                containerIdentifier: String) async {
-        // Extensions on this device can use the new settings immediately and
-        // skip their next network read, even while CloudKit upload is pending.
-        HLLSharedSettingsCacheStore(groupIdentifier: widgetStore.groupIdentifier)
-            .write(projection)
+        // Complete the local handoff before the app asks WidgetKit to reload.
+        // Otherwise a fast extension launch could merge an older CloudKit
+        // document over the App Group snapshot that was just published.
+        HLLSharedSettingsCacheStore(groupIdentifier: widgetStore.groupIdentifier).write(projection)
         if let previous = lastSharedSettingsProjection,
            previous.revision > projection.revision {
             return
@@ -188,8 +182,11 @@ public actor HLLRuntime {
         } ?? false
         guard !unchanged else { return }
         lastSharedSettingsProjection = projection
-        await HLLSharedSettingsProjectionStore(containerIdentifier: containerIdentifier)
-            .write(projection)
+        // Network propagation remains off the launch and WidgetKit path.
+        Task.detached(priority: .utility) {
+            await HLLSharedSettingsProjectionStore(
+                containerIdentifier: cloudContainerIdentifier).write(projection)
+        }
     }
 }
 

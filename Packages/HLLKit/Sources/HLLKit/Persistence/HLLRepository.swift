@@ -158,14 +158,29 @@ public actor HLLRepository {
     /// device. Device-local EventKit IDs are intentionally not included.
     public func sharedSettingsProjection(revision: UInt64,
                                          generatedAt: Date = .now) async throws -> HLLSharedSettingsProjection {
-        async let appSettings = settings()
         async let profiles = calendarPreferences()
         async let events = userEvents()
         async let annotations = annotations()
+        let allAnnotations = try await annotations
+        return try await sharedSettingsProjection(
+            revision: revision, generatedAt: generatedAt,
+            calendars: profiles, userDefinitions: events,
+            annotations: allAnnotations)
+    }
+
+    /// Builds the direct extension projection from values the event engine has
+    /// already loaded. Only the app setting and mutation stamp require reads.
+    public func sharedSettingsProjection(
+        revision: UInt64,
+        generatedAt: Date = .now,
+        calendars: [HLLCalendarPreference],
+        userDefinitions: [HLLUserEvent],
+        annotations: [HLLEventAnnotation]
+    ) async throws -> HLLSharedSettingsProjection {
+        async let appSettings = settings()
         async let metadata: [HLLSharedProjectionMetadata] = database.all(
             HLLSharedProjectionMetadata.self, kind: .syncMetadata, location: .cloud)
-        let allAnnotations = try await annotations
-        let syncedAnnotations = allAnnotations.filter {
+        let syncedAnnotations = annotations.filter {
             $0.syncAcrossDevices && $0.portableKey != nil
         }
         return HLLSharedSettingsProjection(
@@ -173,8 +188,9 @@ public actor HLLRepository {
             generatedAt: generatedAt,
             contentUpdatedAt: try await metadata.first?.updatedAt ?? .distantPast,
             settings: try await appSettings,
-            calendars: try await profiles,
-            userDefinitions: try await events,
+            calendars: Array(Dictionary(calendars.map { ($0.id, $0) },
+                                        uniquingKeysWith: { newer, _ in newer }).values),
+            userDefinitions: userDefinitions,
             annotations: syncedAnnotations)
     }
 
