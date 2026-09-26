@@ -34,6 +34,20 @@ import Testing
                                      calendarPreferences: ["home": hidden], annotations: []).isEmpty)
 }
 
+@Test func queryIntervalAlwaysBoundsComposedRules() {
+    let base = Date(timeIntervalSince1970: 1_000_000)
+    let inside = HLLEvent(id: UUID(), source: .user, title: "Inside", start: base,
+                          end: base.addingTimeInterval(300), calendarID: "home")
+    let outside = HLLEvent(id: UUID(), source: .user, title: "Outside",
+                           start: base.addingTimeInterval(86_400),
+                           end: base.addingTimeInterval(87_000), calendarID: "home")
+    let query = HLLEventQuery(
+        interval: DateInterval(start: base.addingTimeInterval(-60), duration: 3_600),
+        rule: .calendar("home"), context: "test")
+    #expect(HLLEventReducer().reduce([inside, outside], query: query,
+                                     calendarPreferences: [:], annotations: []) == [inside])
+}
+
 @Test func localDatabaseRoundTrip() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }

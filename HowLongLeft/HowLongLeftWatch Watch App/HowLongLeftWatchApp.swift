@@ -3,6 +3,7 @@ import EventKit
 import HLLKit
 import Observation
 import SwiftUI
+import UserNotifications
 import WidgetKit
 
 @main
@@ -33,6 +34,7 @@ final class WatchEventModel {
     var events: [HLLEvent] = []
     var calendars: [(id: String, preference: HLLCalendarPreference)] = []
     var hiddenAnnotations: [HLLEventAnnotation] = []
+    var notificationPreferences = HLLNotificationPreferences(context: "watch.notifications")
     var purchaseSnapshot = HLLPurchaseSnapshot.locked(configuration: .shipping)
     var purchaseProducts: [HLLStoreProduct] = []
     var purchaseErrorMessage: String?
@@ -64,6 +66,21 @@ final class WatchEventModel {
         if EKEventStore.authorizationStatus(for: .event) != .fullAccess {
             needsCalendarAccess = true
             isLoading = false
+        }
+        let quickEvents = Task.detached(priority: .userInitiated) {
+            let payload = HLLWidgetSnapshotStore(
+                groupIdentifier: HLLConfiguration.appGroupIdentifier).read()
+            let now = Date()
+            return payload?.query(HLLEventQuery(
+                interval: DateInterval(start: now.addingTimeInterval(-86_400),
+                                       end: now.addingTimeInterval(14 * 86_400)),
+                rule: .upcoming(now), context: "watch.main"))
+        }
+        Task { [weak self] in
+            guard let events = await quickEvents.value else { return }
+            guard let self, self.isLoading else { return }
+            self.events = events
+            self.isLoading = false
         }
         Task { [weak self] in
             do {
@@ -108,6 +125,7 @@ final class WatchEventModel {
                     guard let self else { return }
                     self.purchaseSnapshot = snapshot
                     WidgetCenter.shared.reloadAllTimelines()
+                    await self.reconcileNotifications(using: runtime)
                 }
             }
         }
@@ -162,11 +180,13 @@ final class WatchEventModel {
             }
             hiddenAnnotations = try await runtime.repository.annotations()
                 .filter { $0.kind == .hidden }
+            notificationPreferences = try await runtime.repository.notificationPreferences()
             needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
             isLoading = false
             if try await runtime.publishWidgetSnapshot() {
                 WidgetCenter.shared.reloadTimelines(ofKind: "HowLongLeftComplications")
             }
+            await reconcileNotifications(using: runtime)
         } catch {
             errorMessage = error.localizedDescription
             isLoading = false
@@ -238,5 +258,40 @@ final class WatchEventModel {
                 await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
+    }
+
+    func setNotificationPreferences(_ preferences: HLLNotificationPreferences) {
+        guard let runtime else { return }
+        guard !preferences.enabled || isFeatureUnlocked(.notifications) else {
+            purchaseErrorMessage = "Notifications are available with How Long Left Premium."
+            return
+        }
+        Task {
+            do {
+                if preferences.enabled {
+                    guard try await runtime.notifications.requestAuthorization() else {
+                        notificationPreferences.enabled = false
+                        errorMessage = "Notifications are disabled in Settings."
+                        return
+                    }
+                }
+                var saved = preferences
+                saved.updatedAt = .now
+                try await runtime.repository.save(saved)
+                notificationPreferences = saved
+                await reconcileNotifications(using: runtime)
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func reconcileNotifications(using runtime: HLLRuntime) async {
+        let options = HLLNotificationScheduler.ScheduleOptions(
+            notifyAtStart: notificationPreferences.notifyAtStart,
+            notifyAtEnd: notificationPreferences.notifyAtEnd,
+            includeAllDay: notificationPreferences.includeAllDay)
+        do {
+            let visibleEvents = notificationPreferences.enabled ? self.events : []
+            try await runtime.notifications.reconcile(events: visibleEvents, options: options)
+        } catch { errorMessage = error.localizedDescription }
     }
 }

@@ -234,6 +234,11 @@ private struct WatchSettingsView: View {
                     } label: {
                         Label("Widgets & Complications", systemImage: "watchface")
                     }
+                    NavigationLink {
+                        WatchNotificationSettingsView(model: model)
+                    } label: {
+                        Label("Notifications", systemImage: "bell")
+                    }
                 }
                 if !model.hiddenAnnotations.isEmpty {
                     Section("Hidden") {
@@ -327,6 +332,66 @@ private struct WatchWidgetSettingsView: View {
             }
         }
         .navigationTitle("Complications")
+    }
+}
+
+private struct WatchNotificationSettingsView: View {
+    let model: WatchEventModel
+
+    var body: some View {
+        List {
+            Section {
+                Text("Start and end alerts follow the same visible watch event list. Hidden events and calendars excluded from the watch app are never scheduled.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if !model.isFeatureUnlocked(.notifications) {
+                    Label("Notifications are available with Premium.", systemImage: "lock.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+            }
+            Section("Schedule") {
+                Toggle("Enable notifications", isOn: enabledBinding)
+                    .disabled(!model.isFeatureUnlocked(.notifications))
+                Toggle("At event start", isOn: startBinding)
+                    .disabled(!canEditRules)
+                Toggle("At event end", isOn: endBinding)
+                    .disabled(!canEditRules)
+                Toggle("Include all-day events", isOn: allDayBinding)
+                    .disabled(!canEditRules)
+            }
+        }
+        .navigationTitle("Notifications")
+    }
+
+    private var canEditRules: Bool {
+        model.isFeatureUnlocked(.notifications) && model.notificationPreferences.enabled
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(get: { model.notificationPreferences.enabled },
+                set: { value in update { $0.enabled = value } })
+    }
+
+    private var startBinding: Binding<Bool> {
+        Binding(get: { model.notificationPreferences.notifyAtStart },
+                set: { value in update { $0.notifyAtStart = value } })
+    }
+
+    private var endBinding: Binding<Bool> {
+        Binding(get: { model.notificationPreferences.notifyAtEnd },
+                set: { value in update { $0.notifyAtEnd = value } })
+    }
+
+    private var allDayBinding: Binding<Bool> {
+        Binding(get: { model.notificationPreferences.includeAllDay },
+                set: { value in update { $0.includeAllDay = value } })
+    }
+
+    private func update(_ change: (inout HLLNotificationPreferences) -> Void) {
+        var preferences = model.notificationPreferences
+        change(&preferences)
+        model.setNotificationPreferences(preferences)
     }
 }
 

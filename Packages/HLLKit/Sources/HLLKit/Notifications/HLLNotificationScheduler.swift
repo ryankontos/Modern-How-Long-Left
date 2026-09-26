@@ -23,13 +23,16 @@ public actor HLLNotificationScheduler {
     private let center: UNUserNotificationCenter
     private let purchases: HLLPurchaseCoordinator
     private let identifierPrefix: String
+    private let maxPendingRequests: Int
 
     public init(center: UNUserNotificationCenter = .current(),
                 purchases: HLLPurchaseCoordinator,
-                identifierPrefix: String = "hll.notification.") {
+                identifierPrefix: String = "hll.notification.",
+                maxPendingRequests: Int = 64) {
         self.center = center
         self.purchases = purchases
         self.identifierPrefix = identifierPrefix
+        self.maxPendingRequests = max(1, maxPendingRequests)
     }
 
     public func requestAuthorization() async throws -> Bool {
@@ -92,18 +95,26 @@ public actor HLLNotificationScheduler {
             await cancelAllManagedRequests()
             return
         }
-        let visibleEvents = events.filter { options.includeAllDay || !$0.isAllDay }
+        let now = Date()
+        let visibleEvents = events
+            .filter { options.includeAllDay || !$0.isAllDay }
+            .sorted { nextTrigger(for: $0, options: options, now: now)
+                < nextTrigger(for: $1, options: options, now: now) }
         let requests = await center.pendingNotificationRequests()
             .filter { $0.identifier.hasPrefix(identifierPrefix) }
-        let desired = Set(visibleEvents.flatMap { event in
-            var identifiers: [String] = []
-            if options.notifyAtStart { identifiers.append(identifier(for: event, kind: "start")) }
-            if options.notifyAtEnd { identifiers.append(identifier(for: event, kind: "end")) }
-            return identifiers
-        })
+        var desired = Set<String>()
+        var scheduledEvents: [HLLEvent] = []
+        for event in visibleEvents {
+            let identifiers = identifiers(for: event, options: options, now: now)
+            guard !identifiers.isEmpty,
+                  desired.count + identifiers.count <= maxPendingRequests else { break }
+            desired.formUnion(identifiers)
+            scheduledEvents.append(event)
+        }
         let stale = requests.map(\.identifier).filter { !desired.contains($0) }
         center.removePendingNotificationRequests(withIdentifiers: stale)
-        for event in visibleEvents {
+        center.removeDeliveredNotifications(withIdentifiers: stale)
+        for event in scheduledEvents {
             if options.notifyAtStart { try await scheduleStart(for: event) }
             if options.notifyAtEnd { try await scheduleEnd(for: event) }
         }
@@ -116,8 +127,30 @@ public actor HLLNotificationScheduler {
 
     private func cancelAllManagedRequests() async {
         let requests = await center.pendingNotificationRequests()
-        center.removePendingNotificationRequests(
-            withIdentifiers: requests.map(\.identifier).filter { $0.hasPrefix(identifierPrefix) })
+        let identifiers = requests.map(\.identifier).filter { $0.hasPrefix(identifierPrefix) }
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
+    private func identifiers(for event: HLLEvent, options: ScheduleOptions,
+                             now: Date) -> [String] {
+        var identifiers: [String] = []
+        if options.notifyAtStart && event.start > now {
+            identifiers.append(identifier(for: event, kind: "start"))
+        }
+        if options.notifyAtEnd && event.end > now {
+            identifiers.append(identifier(for: event, kind: "end"))
+        }
+        return identifiers
+    }
+
+    private func nextTrigger(for event: HLLEvent, options: ScheduleOptions,
+                             now: Date) -> Date {
+        let triggers = [
+            options.notifyAtStart && event.start > now ? event.start : nil,
+            options.notifyAtEnd && event.end > now ? event.end : nil
+        ].compactMap { $0 }
+        return triggers.min() ?? .distantFuture
     }
 
     private func identifier(for event: HLLEvent, kind: String) -> String {

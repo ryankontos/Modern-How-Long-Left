@@ -28,6 +28,13 @@ public struct HLLEventReducer: Sendable {
             .compactMap(\.portableKey))
 
         let visible = index.candidates(for: query.rule).filter { event in
+            // The interval is the hard source boundary even when the caller
+            // supplies a rule such as `.calendar` or `.allDay` by itself.
+            // This keeps composed queries bounded and makes the same reducer
+            // safe for app, widget, complication, and future surfaces.
+            guard event.start < query.interval.end && event.end > query.interval.start else {
+                return false
+            }
             if let key = event.calendarID, let preference = calendarPreferences[key],
                !preference.isVisible(in: query.context) { return false }
             if !query.includeHidden && (hiddenIDs.contains(event.id)
