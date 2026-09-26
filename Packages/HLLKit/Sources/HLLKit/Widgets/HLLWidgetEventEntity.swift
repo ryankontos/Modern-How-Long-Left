@@ -36,7 +36,9 @@ public struct HLLWidgetEventQuery: EntityQuery {
 
     private func available() async -> [HLLWidgetEventEntity] {
         guard let group = Bundle.main.object(forInfoDictionaryKey: "HLLAppGroupIdentifier") as? String,
-              let payload = await HLLExtensionSnapshotLoader().load(groupIdentifier: group) else { return [] }
+              let payload = await HLLExtensionSnapshotLoader().load(
+                  groupIdentifier: group,
+                  cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier) else { return [] }
         return payload.events.filter { $0.end > .now }.sorted { $0.start < $1.start }
             .prefix(100).map(HLLWidgetEventEntity.init)
     }
