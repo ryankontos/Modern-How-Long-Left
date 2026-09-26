@@ -234,6 +234,29 @@ import Testing
     #expect(points.allSatisfy { $0.events.isEmpty })
 }
 
+@Test func widgetProjectionBoundRetainsPinnedEvents() {
+    let start = Date(timeIntervalSince1970: 1_000_000)
+    let events = (0..<4).map { index in
+        HLLEvent(id: UUID(), source: .user, title: "Event \(index)",
+                 start: start.addingTimeInterval(TimeInterval(index * 60)),
+                 end: start.addingTimeInterval(TimeInterval(index * 60 + 30)))
+    }
+    let pinned = HLLWidgetPayload(revision: 1, generatedAt: start,
+                                  expiresAt: start.addingTimeInterval(86_400),
+                                  events: events, userDefinitions: [], calendars: [:],
+                                  annotations: [HLLAnnotationForTest.pinned(events[3])])
+    let limited = pinned.limitingEvents(to: 2)
+    #expect(limited.events.count == 2)
+    #expect(limited.events.contains(events[3]))
+}
+
+private enum HLLAnnotationForTest {
+    static func pinned(_ event: HLLEvent) -> HLLEventAnnotation {
+        HLLEventAnnotation(kind: .pinned, scope: .occurrence,
+                           eventID: event.id, portableKey: event.portableKey)
+    }
+}
+
 @Test func widgetEventEntityPrefersPortableIdentity() {
     let event = HLLEvent(id: UUID(), source: .eventKit, title: "Pinned",
                          start: .now, end: .now.addingTimeInterval(900),

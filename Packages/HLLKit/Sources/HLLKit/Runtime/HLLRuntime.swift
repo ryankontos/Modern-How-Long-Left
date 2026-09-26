@@ -140,6 +140,7 @@ public actor HLLRuntime {
         let interval = DateInterval(start: now.addingTimeInterval(-86_400),
                                     end: now.addingTimeInterval(TimeInterval(days) * 86_400))
         let payload = try await engine.widgetProjection(in: interval, now: now)
+            .limitingEvents()
         try widgetStore.write(payload)
         lastPublishedRevision = payload.revision
         lastPublishedAt = now
