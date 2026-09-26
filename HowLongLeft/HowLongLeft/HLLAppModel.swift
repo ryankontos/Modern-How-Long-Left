@@ -2,14 +2,16 @@ import EventKit
 import Foundation
 import HLLKit
 import Observation
-import UIKit
-import UserNotifications
 import WidgetKit
 
 /// The main actor owns presentation state. HLLKit actors do source and disk work.
 @MainActor @Observable
 final class HLLAppModel {
     var events: [HLLEvent] = []
+    /// Prepared once per source refresh or time boundary. Views can scroll and
+    /// update timer text without repeatedly filtering the complete event set.
+    var currentEvents: [HLLEvent] = []
+    var upcomingEvents: [HLLEvent] = []
     var calendars: [(id: String, preference: HLLCalendarPreference)] = []
     var hiddenAnnotations: [HLLEventAnnotation] = []
     var annotationSyncEnabled = true
@@ -24,19 +26,14 @@ final class HLLAppModel {
     var isLoading = true
     var errorMessage: String?
 
-    private var runtime: HLLRuntime?
+    /// Service access for focused extensions in adjacent files. Observation is
+    /// unnecessary because views consume the value properties above.
+    @ObservationIgnored var runtime: HLLRuntime?
     private var revisionTask: Task<Void, Never>?
     private var purchaseTask: Task<Void, Never>?
     private var boundaryTask: Task<Void, Never>?
+    private var sourceChangeTask: Task<Void, Never>?
     private var hasStarted = false
-
-    func currentEvents(at date: Date = .now) -> [HLLEvent] {
-        events.filter { $0.isRunning(at: date) }
-    }
-
-    func upcomingEvents(at date: Date = .now) -> [HLLEvent] {
-        events.filter { $0.start > date }
-    }
 
     func event(withID id: UUID) -> HLLEvent? {
         events.first { $0.id == id }
@@ -56,19 +53,21 @@ final class HLLAppModel {
         // directly for the first frame instead of waiting for CloudKit or
         // opening EventKit. The runtime performs the authoritative refresh
         // immediately afterward and publishes a newer projection.
-        let quickEvents = Task.detached(priority: .userInitiated) {
+        let quickSnapshot = Task.detached(priority: .userInitiated) {
             let payload = HLLWidgetSnapshotStore(
                 groupIdentifier: HLLConfiguration.appGroupIdentifier).read()
             let now = Date()
-            return payload?.query(HLLEventQuery(
+            return payload?.launchSnapshot(query: HLLEventQuery(
                 interval: DateInterval(start: now.addingTimeInterval(-86_400),
                                        end: now.addingTimeInterval(30 * 86_400)),
                 rule: .upcoming(now), context: "home.main"))
         }
         Task { [weak self] in
-            guard let events = await quickEvents.value else { return }
+            guard let snapshot = await quickSnapshot.value else { return }
             guard let self, self.isLoading else { return }
-            self.events = events
+            self.apply(snapshot.events, at: .now)
+            self.calendars = snapshot.calendars.map { ($0.id.uuidString, $0) }
+            self.hiddenAnnotations = snapshot.hiddenAnnotations
             self.isLoading = false
         }
 
@@ -113,10 +112,13 @@ final class HLLAppModel {
             purchaseTask = Task { [weak self] in
                 for await snapshot in await runtime.purchases.changes() {
                     guard let self else { return }
+                    let changed = !self.purchaseSnapshot.hasSameEntitlements(as: snapshot)
                     self.purchaseSnapshot = snapshot
-                    WidgetCenter.shared.reloadAllTimelines()
-                    await self.reconcileLiveActivities(using: runtime)
-                    await self.reconcileNotifications(using: runtime)
+                    if changed {
+                        WidgetCenter.shared.reloadAllTimelines()
+                        await self.reconcileLiveActivities(using: runtime)
+                        await self.reconcileNotifications(using: runtime)
+                    }
                 }
             }
         }
@@ -163,7 +165,14 @@ final class HLLAppModel {
 
     func sourceChanged() {
         guard let runtime else { return }
-        Task { await runtime.engine.invalidate() }
+        // EventKit and CloudKit commonly emit several notifications for one
+        // logical edit. A short trailing debounce prevents duplicate queries.
+        sourceChangeTask?.cancel()
+        sourceChangeTask = Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            await runtime.engine.invalidate()
+        }
     }
 
     func refresh(publishWidgets: Bool = true) async {
@@ -174,7 +183,7 @@ final class HLLAppModel {
                                         end: now.addingTimeInterval(30 * 86_400))
             let query = HLLEventQuery(interval: interval, rule: .upcoming(now), context: "home.main")
             let snapshot = try await runtime.engine.query(query, now: now)
-            events = snapshot.events
+            apply(snapshot.events, at: now)
             let available = await runtime.eventKit.calendars()
             let bound = try await runtime.repository.bind(available)
             calendars = available.compactMap { info in
@@ -188,7 +197,6 @@ final class HLLAppModel {
             notificationPreferences = try await runtime.repository.notificationPreferences()
             needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
             isLoading = false
-            scheduleNextBoundary(now: now)
             if publishWidgets, try await runtime.publishWidgetSnapshot() {
                 WidgetCenter.shared.reloadTimelines(ofKind: "HowLongLeftWidgets")
             }
@@ -200,199 +208,24 @@ final class HLLAppModel {
         }
     }
 
+    /// A clock boundary only changes classification. Reusing the loaded values
+    /// avoids reopening EventKit and the database when an event starts or ends.
+    private func apply(_ newEvents: [HLLEvent], at date: Date) {
+        events = newEvents
+        currentEvents = newEvents.filter { $0.status(at: date) == .inProgress }
+        upcomingEvents = newEvents.filter { $0.status(at: date) == .upcoming }
+        scheduleNextBoundary(now: date)
+    }
+
     private func scheduleNextBoundary(now: Date) {
         boundaryTask?.cancel()
         guard let next = events.flatMap({ [$0.start, $0.end] }).filter({ $0 > now }).min() else { return }
         boundaryTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(max(1, next.timeIntervalSince(now) + 0.1)))
             guard !Task.isCancelled else { return }
-            await self?.refresh(publishWidgets: false)
+            guard let self else { return }
+            self.apply(self.events, at: .now)
         }
     }
 
-    func addUserEvent(title: String, start: Date, duration: TimeInterval,
-                      isAllDay: Bool = false, recurrence: HLLRecurrenceRule?) {
-        guard let runtime else { return }
-        Task {
-            do {
-                try await runtime.engine.save(HLLUserEvent(title: title, start: start,
-                                                            duration: duration, isAllDay: isAllDay,
-                                                            recurrence: recurrence))
-                await refresh()
-            } catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    /// User occurrences are generated from one definition. Deleting any
-    /// occurrence removes that definition; hiding remains available when the
-    /// user wants to skip only one occurrence of a repeating event.
-    func deleteUserEvent(_ event: HLLEvent) {
-        guard event.source == .user, let runtime else { return }
-        let definitionID = event.seriesID.flatMap(UUID.init(uuidString:)) ?? event.id
-        Task {
-            do {
-                try await runtime.engine.deleteUserEvent(id: definitionID)
-                await refresh()
-            } catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    func annotate(_ event: HLLEvent, kind: HLLEventAnnotation.Kind,
-                  scope: HLLEventAnnotation.Scope) {
-        guard let runtime else { return }
-        Task {
-            do {
-                let settings = try await runtime.repository.settings()
-                let canSync = event.portableKey != nil
-                let annotation = HLLEventAnnotation(kind: kind, scope: scope,
-                    eventID: event.id, seriesID: event.seriesID,
-                    portableKey: event.portableKey, eventTitle: event.title,
-                    expiresAt: scope == .occurrence ? event.end.addingTimeInterval(90 * 86_400) : nil,
-                    syncAcrossDevices: settings.syncEventAnnotations && canSync)
-                try await runtime.engine.save(annotation)
-                await refresh()
-            } catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    func setCalendarVisibility(_ calendar: HLLCalendarPreference,
-                               context: HLLContextID, visible: Bool) {
-        guard let runtime else { return }
-        Task {
-            do {
-                try await runtime.engine.setCalendarVisibility(profileID: calendar.id,
-                                                                context: context, isVisible: visible)
-                await refresh()
-            }
-            catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    func removeAnnotation(_ annotation: HLLEventAnnotation) {
-        guard let runtime else { return }
-        Task {
-            do { try await runtime.engine.removeAnnotation(id: annotation.id) }
-            catch { errorMessage = error.localizedDescription }
-            await refresh()
-        }
-    }
-
-    func setAnnotationSync(_ enabled: Bool) {
-        guard let runtime else { return }
-        annotationSyncEnabled = enabled
-        Task {
-            do { try await runtime.engine.setAnnotationSync(enabled) }
-            catch { errorMessage = error.localizedDescription }
-            await refresh()
-        }
-    }
-
-    func setWidgetDefaults(_ defaults: HLLWidgetDefaults) {
-        guard let runtime else { return }
-        widgetDefaults = defaults
-        Task {
-            do { try await runtime.repository.save(defaults) }
-            catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    func setNotificationPreferences(_ preferences: HLLNotificationPreferences) {
-        guard let runtime else { return }
-        guard !preferences.enabled || isFeatureUnlocked(.notifications) else {
-            purchaseErrorMessage = "Notifications are available with How Long Left Premium."
-            return
-        }
-        Task {
-            do {
-                if preferences.enabled {
-                    guard try await runtime.notifications.requestAuthorization() else {
-                        notificationPreferences.enabled = false
-                        errorMessage = "Notifications are disabled in Settings."
-                        return
-                    }
-                }
-                var saved = preferences
-                saved.updatedAt = .now
-                try await runtime.repository.save(saved)
-                notificationPreferences = saved
-                await reconcileNotifications(using: runtime)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    func startActivity(for event: HLLEvent) {
-        guard let runtime else { return }
-        guard isFeatureUnlocked(.liveActivities) else {
-            purchaseErrorMessage = "Live Activities are available with How Long Left Premium."
-            return
-        }
-        Task {
-            do {
-                try await runtime.liveActivities.start(event)
-                activeActivityEventKeys = await runtime.liveActivities.activeEventKeys()
-            } catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    func stopActivity(for event: HLLEvent) {
-        guard let runtime else { return }
-        Task {
-            await runtime.liveActivities.stop(event)
-            activeActivityEventKeys = await runtime.liveActivities.activeEventKeys()
-        }
-    }
-
-    func isActivityRunning(for event: HLLEvent) -> Bool {
-        activeActivityEventKeys.contains(event.portableKey ?? event.id.uuidString)
-    }
-
-    func isAutomaticallyTracking(_ target: HLLLiveActivityPolicy.Target) -> Bool {
-        activityPolicies.contains { $0.target == target }
-    }
-
-    func setAutomaticTracking(_ target: HLLLiveActivityPolicy.Target, enabled: Bool) {
-        guard let runtime else { return }
-        guard !enabled || isFeatureUnlocked(.liveActivities) else {
-            purchaseErrorMessage = "Live Activities are available with How Long Left Premium."
-            return
-        }
-        Task {
-            do {
-                if enabled {
-                    if !isAutomaticallyTracking(target) {
-                        try await runtime.repository.save(HLLLiveActivityPolicy(target: target))
-                    }
-                } else {
-                    for policy in activityPolicies where policy.target == target {
-                        try await runtime.repository.deleteActivityPolicy(id: policy.id)
-                    }
-                }
-                activityPolicies = try await runtime.repository.activityPolicies()
-                await reconcileLiveActivities(using: runtime)
-            } catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    private func reconcileLiveActivities(using runtime: HLLRuntime) async {
-        do {
-            let mayStart = UIApplication.shared.applicationState == .active
-            try await runtime.liveActivities.reconcile(mayStart: mayStart)
-            activeActivityEventKeys = await runtime.liveActivities.activeEventKeys()
-        } catch { errorMessage = error.localizedDescription }
-    }
-
-    private func reconcileNotifications(using runtime: HLLRuntime) async {
-        let options = HLLNotificationScheduler.ScheduleOptions(
-            notifyAtStart: notificationPreferences.notifyAtStart,
-            notifyAtEnd: notificationPreferences.notifyAtEnd,
-            includeAllDay: notificationPreferences.includeAllDay)
-        do {
-            let visibleEvents = notificationPreferences.enabled ? self.events : []
-            try await runtime.notifications.reconcile(events: visibleEvents, options: options)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }

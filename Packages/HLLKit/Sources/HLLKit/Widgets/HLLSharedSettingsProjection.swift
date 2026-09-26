@@ -26,13 +26,40 @@ public struct HLLSharedSettingsProjection: Codable, Sendable, Equatable {
         self.userDefinitions = userDefinitions
         self.annotations = annotations
     }
+
+    /// Revisions and generation dates describe transport attempts. Only these
+    /// fields affect another device, so equal content does not need a CloudKit
+    /// save and its accompanying remote notifications.
+    public func hasSameContent(as other: Self) -> Bool {
+        settings == other.settings
+            && calendars.sorted(by: calendarOrder) == other.calendars.sorted(by: calendarOrder)
+            && userDefinitions.sorted(by: userOrder) == other.userDefinitions.sorted(by: userOrder)
+            && annotations.sorted(by: annotationOrder) == other.annotations.sorted(by: annotationOrder)
+    }
+
+    private func calendarOrder(_ lhs: HLLCalendarPreference,
+                               _ rhs: HLLCalendarPreference) -> Bool {
+        lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func userOrder(_ lhs: HLLUserEvent, _ rhs: HLLUserEvent) -> Bool {
+        lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func annotationOrder(_ lhs: HLLEventAnnotation,
+                                 _ rhs: HLLEventAnnotation) -> Bool {
+        lhs.id.uuidString < rhs.id.uuidString
+    }
 }
 
 /// One replaceable private CloudKit record. It is deliberately independent
 /// from Core Data mirroring, so extensions only perform one bounded read.
 public struct HLLSharedSettingsProjectionStore: Sendable {
     public static let recordType = "HLLSharedSettingsProjection"
-    public static let recordName = "current"
+    // CloudKit record IDs are unique within a zone, regardless of record type.
+    // A namespaced ID prevents this singleton from colliding with the purchase
+    // singleton, which lives in the same private database.
+    public static let recordName = "hll.shared-settings.current"
 
     private let containerIdentifier: String
 
@@ -61,21 +88,33 @@ public struct HLLSharedSettingsProjectionStore: Sendable {
                 record["generatedAt"] = projection.generatedAt as CKRecordValue
                 record["revision"] = projection.revision as CKRecordValue
             }
-            try await saveReplacing(recordID: recordID, database: database, update: update)
+            try await saveReplacing(projection: projection, recordID: recordID,
+                                    database: database, update: update)
         } catch {
             // A later app refresh retries. The platform projection remains usable.
         }
     }
 
-    private func saveReplacing(recordID: CKRecord.ID, database: CKDatabase,
+    private func saveReplacing(projection: HLLSharedSettingsProjection,
+                               recordID: CKRecord.ID, database: CKDatabase,
                                update: (CKRecord) -> Void) async throws {
         do {
             let record = try await database.record(for: recordID)
+            if let data = record["payload"] as? Data,
+               let existing = try? JSONDecoder().decode(HLLSharedSettingsProjection.self, from: data),
+               projection.hasSameContent(as: existing) {
+                return
+            }
             update(record)
             do {
                 _ = try await database.save(record)
             } catch let error as CKError where error.code == .serverRecordChanged {
                 let latest = try await database.record(for: recordID)
+                if let data = latest["payload"] as? Data,
+                   let existing = try? JSONDecoder().decode(HLLSharedSettingsProjection.self, from: data),
+                   projection.hasSameContent(as: existing) {
+                    return
+                }
                 update(latest)
                 _ = try await database.save(latest)
             }

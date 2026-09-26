@@ -46,28 +46,24 @@ private struct WatchEventListView: View {
 
     var body: some View {
         NavigationStack {
-            TimelineView(.periodic(from: .now, by: mode == .current ? 1 : 30)) { context in
-                let events = mode == .current
-                    ? model.currentEvents(at: context.date)
-                    : model.upcomingEvents(at: context.date)
-                Group {
-                    if events.isEmpty {
-                        ContentUnavailableView(mode == .current ? "Nothing now" : "Nothing next",
-                                               systemImage: mode == .current ? "clock" : "calendar",
-                                               description: Text(mode == .current
-                                                                 ? "Events appear here while active."
-                                                                 : "Your next events appear here."))
-                    } else {
-                        List(events) { event in
-                            NavigationLink(value: event.id) {
-                                WatchEventCard(event: event, now: context.date)
-                            }
-                            .contextMenu(menuItems: {
-                                WatchEventActions(event: event, model: model)
-                            })
+            let events = mode == .current ? model.currentEvents : model.upcomingEvents
+            Group {
+                if events.isEmpty {
+                    ContentUnavailableView(mode == .current ? "Nothing now" : "Nothing next",
+                                           systemImage: mode == .current ? "clock" : "calendar",
+                                           description: Text(mode == .current
+                                                             ? "Events appear here while active."
+                                                             : "Your next events appear here."))
+                } else {
+                    List(events) { event in
+                        NavigationLink(value: event.id) {
+                            WatchEventCard(event: event)
                         }
-                        .listStyle(.carousel)
+                        .contextMenu(menuItems: {
+                            WatchEventActions(event: event, model: model)
+                        })
                     }
+                    .listStyle(.carousel)
                 }
             }
             .navigationTitle(mode == .current ? "Now" : "Upcoming")
@@ -97,9 +93,8 @@ private struct WatchEventListView: View {
 
 private struct WatchEventCard: View {
     let event: HLLEvent
-    let now: Date
 
-    private var running: Bool { event.isRunning(at: now) }
+    private var running: Bool { event.status() == .inProgress }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -125,7 +120,9 @@ private struct WatchEventCard: View {
             }
             .foregroundStyle(running ? .orange : .blue)
             if running && event.end > event.start {
-                ProgressView(value: event.progress(at: now))
+                // SwiftUI owns this timer-backed progress view. It updates its
+                // drawing without invalidating and refiltering the entire list.
+                ProgressView(timerInterval: event.start...event.end, countsDown: false)
                     .tint(.orange)
             }
             Text(event.isAllDay ? "All day" : event.start.formatted(date: .abbreviated, time: .shortened))
@@ -145,9 +142,7 @@ private struct WatchEventDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    WatchEventCard(event: event, now: context.date)
-                }
+                WatchEventCard(event: event)
                 Divider()
                 LabeledContent("Starts", value: event.start.formatted(date: .abbreviated, time: .shortened))
                 LabeledContent("Ends", value: event.end.formatted(date: .abbreviated, time: .shortened))
@@ -316,7 +311,7 @@ private struct WatchWidgetSettingsView: View {
     var body: some View {
         List {
             Section {
-                Text("Configure each complication from the watch face editor. The shared configuration supports current, in-progress, or all upcoming events, all-day filtering, a pinned event, and several countdown styles.")
+                Text("Configure each complication from the watch face editor. It can show current, in-progress, all upcoming, or the event with the soonest countdown, with all-day filtering, a pinned event, and several countdown styles.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if !model.isFeatureUnlocked(.complications) {
@@ -484,13 +479,5 @@ private struct WatchCalendarSettingsView: View {
                 .isVisible(in: context) ?? preference.isVisible(in: context)
         },
                        set: { model.setCalendarVisibility(preference, context: context, visible: $0) })
-    }
-}
-
-private extension HLLEvent {
-    func progress(at date: Date) -> Double {
-        let duration = end.timeIntervalSince(start)
-        guard duration > 0 else { return 1 }
-        return min(max(date.timeIntervalSince(start) / duration, 0), 1)
     }
 }

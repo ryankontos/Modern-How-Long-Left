@@ -14,6 +14,53 @@ import Testing
                                      calendarPreferences: [:], annotations: []) == [event])
 }
 
+@Test func eventStatusUsesExclusiveEndBoundary() {
+    let start = Date(timeIntervalSince1970: 1_000)
+    let end = start.addingTimeInterval(60)
+    let event = HLLEvent(id: UUID(), source: .user, title: "Status",
+                         start: start, end: end)
+
+    #expect(event.status(at: start.addingTimeInterval(-0.1)) == .upcoming)
+    #expect(event.status(at: start) == .inProgress)
+    #expect(event.status(at: end.addingTimeInterval(-0.1)) == .inProgress)
+    #expect(event.status(at: end) == .complete)
+}
+
+@Test func widgetContentComparisonIgnoresRefreshMetadataAndOrdering() {
+    let start = Date(timeIntervalSince1970: 1_000)
+    let first = HLLEvent(id: UUID(), source: .user, title: "First",
+                         start: start, end: start.addingTimeInterval(60))
+    let second = HLLEvent(id: UUID(), source: .user, title: "Second",
+                          start: start.addingTimeInterval(120),
+                          end: start.addingTimeInterval(180))
+    let old = HLLWidgetPayload(revision: 1, generatedAt: start,
+                               expiresAt: start.addingTimeInterval(300),
+                               events: [first, second], userDefinitions: [],
+                               calendars: [:], annotations: [])
+    let refreshed = HLLWidgetPayload(revision: 99,
+                                     generatedAt: start.addingTimeInterval(30),
+                                     expiresAt: start.addingTimeInterval(600),
+                                     events: [second, first], userDefinitions: [],
+                                     calendars: [:], annotations: [])
+
+    #expect(old.hasSameContent(as: refreshed))
+}
+
+@Test func countdownOrderingUsesEndForRunningAndStartForUpcoming() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let running = HLLEvent(id: UUID(), source: .user, title: "Running",
+                           start: now.addingTimeInterval(-600),
+                           end: now.addingTimeInterval(300))
+    let startingSooner = HLLEvent(id: UUID(), source: .user, title: "Sooner",
+                                  start: now.addingTimeInterval(60),
+                                  end: now.addingTimeInterval(3_600))
+
+    #expect(HLLWidgetSortOrder.countdownDate.sort([running, startingSooner], at: now)
+        == [startingSooner, running])
+    #expect(running.countdownDate(at: now) == running.end)
+    #expect(startingSooner.countdownDate(at: now) == startingSooner.start)
+}
+
 @Test func indexedRulesAndCalendarContexts() {
     let base = Date(timeIntervalSince1970: 1_000_000)
     let morning = HLLEvent(id: UUID(), source: .eventKit, title: "Morning", start: base,
@@ -232,6 +279,27 @@ import Testing
     let points = HLLWidgetTimelinePlanner().plan(payload: payload, now: start,
         context: "new.widget.mode", limit: 3, rule: { .upcoming($0) })
     #expect(points.allSatisfy { $0.events.isEmpty })
+}
+
+@Test func widgetTimelineReevaluatesSmartCountdownAtTransitions() {
+    let now = Date()
+    let running = HLLEvent(id: UUID(), source: .user, title: "Running",
+                           start: now.addingTimeInterval(-60),
+                           end: now.addingTimeInterval(300))
+    let startingSoon = HLLEvent(id: UUID(), source: .user, title: "Starting",
+                                start: now.addingTimeInterval(100),
+                                end: now.addingTimeInterval(500))
+    let payload = HLLWidgetPayload(revision: 1, generatedAt: now,
+                                   expiresAt: now.addingTimeInterval(86_400),
+                                   events: [running, startingSoon], userDefinitions: [],
+                                   calendars: [:], annotations: [])
+    let points = HLLWidgetTimelinePlanner().plan(
+        payload: payload, now: now, context: "test", limit: 1,
+        sortOrder: .countdownDate, rule: { .upcoming($0) })
+
+    #expect(points.first?.events == [startingSoon])
+    #expect(points.contains { $0.date == startingSoon.start && $0.events == [running] })
+    #expect(points.contains { $0.date == running.end && $0.events == [startingSoon] })
 }
 
 @Test func widgetProjectionBoundRetainsPinnedEvents() {

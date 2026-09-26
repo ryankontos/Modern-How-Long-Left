@@ -15,8 +15,6 @@ public actor HLLRuntime {
 #if os(iOS)
     public let liveActivities: HLLLiveActivityCoordinator
 #endif
-    private var lastPublishedRevision: UInt64?
-    private var lastPublishedAt: Date?
     private let cloudContainerIdentifier: String?
     private var lastSharedSettingsProjection: HLLSharedSettingsProjection?
 
@@ -133,16 +131,31 @@ public actor HLLRuntime {
     @discardableResult
     public func publishWidgetSnapshot(days: Int = 14) async throws -> Bool {
         let now = Date()
-        let currentRevision = await engine.currentRevision
-        if lastPublishedRevision == currentRevision,
-           let lastPublishedAt, now.timeIntervalSince(lastPublishedAt) < 15 * 60 { return false }
-        let interval = DateInterval(start: now.addingTimeInterval(-86_400),
-                                    end: now.addingTimeInterval(TimeInterval(days) * 86_400))
+        let calendar = Calendar.autoupdatingCurrent
+        let start = calendar.startOfDay(for: now)
+        let end = calendar.date(byAdding: .day, value: max(2, days), to: start)
+            ?? start.addingTimeInterval(TimeInterval(max(2, days)) * 86_400)
+        let interval = DateInterval(start: start, end: end)
         let payload = try await engine.widgetProjection(in: interval, now: now)
             .limitingEvents()
+
+        // Write first and ask WidgetKit to reload only when renderable content
+        // changed. This protects the limited complication reload budget when
+        // launch, EventKit, and CloudKit notifications arrive close together.
+        if let previous = widgetStore.read(), payload.hasSameContent(as: previous) {
+            await publishSharedSettings(from: payload, generatedAt: now)
+            return false
+        }
         try widgetStore.write(payload)
-        lastPublishedRevision = payload.revision
-        lastPublishedAt = now
+        await publishSharedSettings(from: payload, generatedAt: now)
+        return true
+    }
+
+    /// Shared settings are published independently of WidgetKit reloads. A
+    /// settings-only change may produce the same visible event list today but
+    /// still needs to reach another device for a future event or surface.
+    private func publishSharedSettings(from payload: HLLWidgetPayload,
+                                       generatedAt: Date) async {
         // Only portable settings cross devices. Calendar occurrences remain
         // in the local App Group snapshot and are read from local EventKit by
         // each platform's extension.
@@ -150,16 +163,19 @@ public actor HLLRuntime {
         if let cloudContainerIdentifier, !cloudContainerIdentifier.isEmpty {
             Task.detached(priority: .utility) {
                 guard let shared = try? await repository.sharedSettingsProjection(
-                    revision: payload.revision, generatedAt: now) else { return }
+                    revision: payload.revision, generatedAt: generatedAt) else { return }
                 await self.publishSharedSettingsIfChanged(shared,
                                                           containerIdentifier: cloudContainerIdentifier)
             }
         }
-        return true
     }
 
     private func publishSharedSettingsIfChanged(_ projection: HLLSharedSettingsProjection,
                                                 containerIdentifier: String) async {
+        // Extensions on this device can use the new settings immediately and
+        // skip their next network read, even while CloudKit upload is pending.
+        HLLSharedSettingsCacheStore(groupIdentifier: widgetStore.groupIdentifier)
+            .write(projection)
         if let previous = lastSharedSettingsProjection,
            previous.revision > projection.revision {
             return

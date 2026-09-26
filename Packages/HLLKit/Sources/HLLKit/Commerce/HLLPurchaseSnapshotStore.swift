@@ -6,7 +6,8 @@ import Foundation
 /// lets iPhone and watch recover purchase state independently.
 public struct HLLPurchaseSnapshotStore: Sendable {
     public static let recordType = "HLLPurchaseStatus"
-    public static let recordName = "current"
+    // CloudKit record IDs are unique within a zone, regardless of record type.
+    public static let recordName = "hll.purchase-status.current"
 
     private let groupIdentifier: String
     private let cloudContainerIdentifier: String?

@@ -6,7 +6,12 @@ import WidgetKit
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        true
+        HLLBackgroundRefresh.register()
+        HLLBackgroundRefresh.schedule()
+        // Silent CloudKit subscription pushes require APNs registration, but
+        // they do not show an alert or request notification permission.
+        application.registerForRemoteNotifications()
+        return true
     }
 
     func application(_ application: UIApplication, configurationForConnecting session: UISceneSession,
@@ -26,10 +31,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                     groupIdentifier: HLLConfiguration.appGroupIdentifier,
                     cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier)
                 await runtime.engine.invalidate()
-                if try await runtime.publishWidgetSnapshot() {
+                let changed = try await runtime.publishWidgetSnapshot()
+                if changed {
                     WidgetCenter.shared.reloadAllTimelines()
                 }
-                completionHandler(.newData)
+                completionHandler(changed ? .newData : .noData)
             } catch {
                 completionHandler(.failed)
             }

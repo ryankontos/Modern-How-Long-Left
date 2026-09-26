@@ -32,6 +32,16 @@ public struct HLLWidgetPayload: Codable, Sendable {
                                  calendarPreferences: calendars, annotations: annotations)
     }
 
+    /// Compares only information that can change what an extension renders.
+    /// Generation dates and revisions describe the refresh attempt, so using
+    /// them here would spend WidgetKit reload budget on identical content.
+    public func hasSameContent(as other: Self) -> Bool {
+        ordered(events) == ordered(other.events)
+            && userDefinitions.sorted(by: userOrder) == other.userDefinitions.sorted(by: userOrder)
+            && calendars == other.calendars
+            && annotations.sorted(by: annotationOrder) == other.annotations.sorted(by: annotationOrder)
+    }
+
     /// Reduce a projection deterministically while retaining every pinned
     /// event that fits. Unpinned events are ordered by start time, which gives
     /// widgets the most useful nearby data when a calendar is unusually busy.
@@ -52,6 +62,19 @@ public struct HLLWidgetPayload: Codable, Sendable {
     private static func eventOrder(_ lhs: HLLEvent, _ rhs: HLLEvent) -> Bool {
         if lhs.start != rhs.start { return lhs.start < rhs.start }
         return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+
+    private func ordered(_ values: [HLLEvent]) -> [HLLEvent] {
+        values.sorted(by: Self.eventOrder)
+    }
+
+    private func userOrder(_ lhs: HLLUserEvent, _ rhs: HLLUserEvent) -> Bool {
+        lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    private func annotationOrder(_ lhs: HLLEventAnnotation, _ rhs: HLLEventAnnotation) -> Bool {
+        lhs.id.uuidString < rhs.id.uuidString
     }
 }
 

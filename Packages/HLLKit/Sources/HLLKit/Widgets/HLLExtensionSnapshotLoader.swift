@@ -24,23 +24,35 @@ public struct HLLExtensionSnapshotLoader: Sendable {
     public func load(groupIdentifier: String, cloudContainerIdentifier: String? = nil,
                      now: Date = .now) async -> HLLWidgetPayload? {
         let cached = HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier).read()
-        async let sharedTask = sharedProjection(cloudContainerIdentifier)
-        let shared = await sharedTask
+        let source = HLLEventKitSource()
+        let interval = DateInterval(start: now.addingTimeInterval(-86_400),
+                                    end: now.addingTimeInterval(14 * 86_400))
+        let sharedCache = HLLSharedSettingsCacheStore(groupIdentifier: groupIdentifier)
+        let cachedShared = sharedCache.read()
+        let freshShared = cachedShared.flatMap {
+            now.timeIntervalSince($0.checkedAt) < 15 * 60 ? $0.projection : nil
+        }
+
+        // CloudKit and EventKit are independent. Starting both immediately is
+        // particularly important on Apple Watch, where waiting for iCloud
+        // before even touching the local calendar can dominate timeline time.
+        async let sharedTask = cachedOrRefreshedSharedProjection(
+            fresh: freshShared, identifier: cloudContainerIdentifier,
+            fallback: cachedShared?.projection, cache: sharedCache, now: now)
+        async let authorizedTask = source.authorizationStatus() == .fullAccess
+        let authorized = await authorizedTask
+        async let rawTask = authorized ? source.events(in: interval) : []
+        let (shared, raw) = await (sharedTask, rawTask)
         // Calendar occurrences are never fetched from CloudKit. The local
         // App Group snapshot is only a same-device seed; local EventKit is
         // authoritative whenever access is available.
         let seed = merge(shared: shared, into: cached, now: now)
-        let source = HLLEventKitSource()
-        let interval = DateInterval(start: now.addingTimeInterval(-86_400),
-                                    end: now.addingTimeInterval(14 * 86_400))
-        let authorized = await source.authorizationStatus() == .fullAccess
         guard authorized else {
             return expandUserEvents(in: seed, interval: interval, now: now,
                                     includeCachedCalendarEvents:
                                         allowsCachedCalendarEventsWhenUnauthorized)
         }
 
-        let raw = await source.events(in: interval)
         let sharedProfiles = shared?.calendars ?? []
         var calendars = seed?.calendars ?? [:]
         for event in raw {
@@ -103,6 +115,30 @@ public struct HLLExtensionSnapshotLoader: Sendable {
         }
     }
 
+    private func refreshSharedProjection(
+        _ identifier: String?,
+        fallback: HLLSharedSettingsProjection?,
+        cache: HLLSharedSettingsCacheStore,
+        now: Date
+    ) async -> HLLSharedSettingsProjection? {
+        let value = await sharedProjection(identifier)
+        let best = value ?? fallback
+        cache.write(best, checkedAt: now)
+        return best
+    }
+
+    private func cachedOrRefreshedSharedProjection(
+        fresh: HLLSharedSettingsProjection?,
+        identifier: String?,
+        fallback: HLLSharedSettingsProjection?,
+        cache: HLLSharedSettingsCacheStore,
+        now: Date
+    ) async -> HLLSharedSettingsProjection? {
+        if let fresh { return fresh }
+        return await refreshSharedProjection(identifier, fallback: fallback,
+                                              cache: cache, now: now)
+    }
+
     private func merge(shared: HLLSharedSettingsProjection?,
                        into platform: HLLWidgetPayload?,
                        now: Date) -> HLLWidgetPayload? {
@@ -126,16 +162,16 @@ public struct HLLExtensionSnapshotLoader: Sendable {
             }
         }
 
-        var definitions = Dictionary((platform?.userDefinitions ?? []).map { ($0.id, $0) },
-                                     uniquingKeysWith: { newerUserEvent($0, $1)! })
-        for definition in shared.userDefinitions {
-            definitions[definition.id] = newerUserEvent(definitions[definition.id], definition)
-        }
+        // The shared projection is a complete replacement for synced user
+        // definitions. Treating it as an additive merge would resurrect an
+        // event that another device deleted.
+        let definitions = shared.userDefinitions
 
         // A device-local annotation may be intentionally unsynced. Merge by
         // logical ID and updatedAt instead of replacing the entire list with
         // the most recently uploaded cross-device projection.
-        var annotations = Dictionary((platform?.annotations ?? []).map { ($0.id, $0) },
+        var annotations = Dictionary((platform?.annotations ?? [])
+            .filter { !$0.syncAcrossDevices }.map { ($0.id, $0) },
                                      uniquingKeysWith: { newerAnnotation($0, $1)! })
         for annotation in shared.annotations {
             annotations[annotation.id] = newerAnnotation(annotations[annotation.id], annotation)
@@ -146,7 +182,7 @@ public struct HLLExtensionSnapshotLoader: Sendable {
                                                  shared.generatedAt),
                                 expiresAt: platform?.expiresAt ?? now.addingTimeInterval(14 * 86_400),
                                 events: platform?.events ?? [],
-                                userDefinitions: definitions.values.sorted { $0.start < $1.start },
+                                userDefinitions: definitions.sorted { $0.start < $1.start },
                                 calendars: calendars,
                                 annotations: annotations.values.sorted { $0.updatedAt < $1.updatedAt })
     }

@@ -33,6 +33,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneDidBecomeActive(_ scene: UIScene) { model?.sourceChanged() }
 
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        HLLBackgroundRefresh.schedule()
+    }
+
     func sceneDidDisconnect(_ scene: UIScene) {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()

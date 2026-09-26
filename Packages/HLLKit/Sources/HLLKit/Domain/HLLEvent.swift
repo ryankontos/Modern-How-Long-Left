@@ -4,6 +4,15 @@ import Foundation
 public struct HLLEvent: Identifiable, Hashable, Codable, Sendable {
     public enum Source: String, Codable, Sendable { case eventKit, user }
 
+    /// The event's time-relative state. It is always derived from the event's
+    /// dates so a value stored on disk can never become stale while the app or
+    /// a complication is asleep.
+    public enum Status: String, Codable, Sendable {
+        case upcoming
+        case inProgress
+        case complete
+    }
+
     public let id: UUID
     public let source: Source
     public let title: String
@@ -35,5 +44,26 @@ public struct HLLEvent: Identifiable, Hashable, Codable, Sendable {
         self.notes = notes
     }
 
-    public func isRunning(at date: Date) -> Bool { start <= date && date < end }
+    /// Returns the status at any point in time. `.now` is evaluated at the call
+    /// site, which keeps this convenient for UI while remaining deterministic
+    /// in tests, timeline generation, and notification scheduling.
+    public func status(at date: Date = .now) -> Status {
+        if date < start { return .upcoming }
+        if date < end { return .inProgress }
+        return .complete
+    }
+
+    public func isRunning(at date: Date = .now) -> Bool {
+        status(at: date) == .inProgress
+    }
+
+    /// The date a countdown is moving toward: start for an upcoming event and
+    /// end for one in progress. Completed events have no useful countdown.
+    public func countdownDate(at date: Date = .now) -> Date? {
+        switch status(at: date) {
+        case .upcoming: start
+        case .inProgress: end
+        case .complete: nil
+        }
+    }
 }

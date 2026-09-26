@@ -20,6 +20,9 @@ public struct HLLWidgetConfigurationIntent: WidgetConfigurationIntent {
     @Parameter(title: "Style", default: .automatic)
     public var style: HLLWidgetStyle
 
+    @Parameter(title: "Order", default: .countdownDate)
+    public var sortOrder: HLLWidgetSortOrder
+
     @Parameter(title: "Number of Events", default: 3)
     public var count: Int
 
@@ -79,8 +82,16 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
                          in context: Context) async -> Timeline<HLLWidgetEntry> {
         let now = Date()
         let entries = await entries(for: configuration)
+#if os(watchOS)
+        // A watch with an active complication receives a larger refresh budget.
+        // Known transitions are already in the timeline; this cadence mainly
+        // discovers edits made in Calendar while both apps are closed.
+        let refreshInterval: TimeInterval = 15 * 60
+#else
+        let refreshInterval: TimeInterval = 30 * 60
+#endif
         return Timeline(entries: entries.isEmpty ? [HLLWidgetEntry(date: now, events: [], style: configuration.style)] : entries,
-                        policy: .after(now.addingTimeInterval(30 * 60)))
+                        policy: .after(now.addingTimeInterval(refreshInterval)))
     }
 
     private func entries(for configuration: HLLWidgetConfigurationIntent) async -> [HLLWidgetEntry] {
@@ -98,13 +109,16 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
             cloudContainerIdentifier: cloudContainerIdentifier,
             now: now)
         let mode = configuration.mode
+        let sortOrder = configuration.sortOrder
         let selectedID = configuration.event?.id
         let includeAllDay = configuration.includeAllDay
-        let count = mode == .current ? 1 : min(max(configuration.count, 1), 6)
+        let count = (mode == .current || mode == .soonestCountdown)
+            ? 1 : min(max(configuration.count, 1), 6)
         let points = HLLWidgetTimelinePlanner().plan(
             payload: payload, now: now, context: contextID,
             limit: count,
             updateProgress: configuration.style == .progress || configuration.style == .detailed,
+            sortOrder: mode == .soonestCountdown ? .countdownDate : sortOrder,
             rule: { date in
                 var rules: [HLLEventRule] = [mode.rule(at: date)]
                 if !includeAllDay { rules.append(.allDay(false)) }

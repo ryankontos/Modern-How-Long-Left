@@ -8,6 +8,38 @@ import WatchKit
 import WidgetKit
 
 final class HLLWatchApplicationDelegate: NSObject, WKApplicationDelegate {
+    static let refreshIdentifier = "hll.event-refresh"
+
+    func applicationDidFinishLaunching() {
+        WKApplication.shared().registerForRemoteNotifications()
+        Self.scheduleEventRefresh()
+    }
+
+    /// watchOS grants roughly four refresh opportunities per hour to an app
+    /// with an active complication. The requested date is a preference; the
+    /// timeline remains correct if the system delays or omits this task.
+    static func scheduleEventRefresh() {
+        WKApplication.shared().scheduleBackgroundRefresh(
+            withPreferredDate: Date().addingTimeInterval(15 * 60),
+            userInfo: refreshIdentifier as NSString
+        ) { _ in }
+    }
+
+    static func refreshExtensionData() async {
+        defer { scheduleEventRefresh() }
+        do {
+            let runtime = try await HLLRuntime.shared(
+                groupIdentifier: HLLConfiguration.appGroupIdentifier,
+                cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier)
+            await runtime.engine.invalidate()
+            if try await runtime.publishWidgetSnapshot() {
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+        } catch {
+            // The next scheduled refresh or foreground launch retries.
+        }
+    }
+
     func application(_ application: WKApplication,
                      didReceiveRemoteNotification userInfo: [AnyHashable: Any],
                      fetchCompletionHandler completionHandler: @escaping (WKBackgroundFetchResult) -> Void) {
@@ -17,10 +49,11 @@ final class HLLWatchApplicationDelegate: NSObject, WKApplicationDelegate {
                     groupIdentifier: HLLConfiguration.appGroupIdentifier,
                     cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier)
                 await runtime.engine.invalidate()
-                if try await runtime.publishWidgetSnapshot() {
+                let changed = try await runtime.publishWidgetSnapshot()
+                if changed {
                     WidgetCenter.shared.reloadAllTimelines()
                 }
-                completionHandler(.newData)
+                completionHandler(changed ? .newData : .noData)
             } catch {
                 completionHandler(.failed)
             }
@@ -46,8 +79,15 @@ struct HowLongLeftWatchApp: App {
                     model.sourceChanged()
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { model.sourceChanged() }
+                    if phase == .active {
+                        model.sourceChanged()
+                    } else if phase == .background {
+                        HLLWatchApplicationDelegate.scheduleEventRefresh()
+                    }
                 }
+        }
+        .backgroundTask(.appRefresh(HLLWatchApplicationDelegate.refreshIdentifier)) { _ in
+            await HLLWatchApplicationDelegate.refreshExtensionData()
         }
     }
 }
@@ -56,6 +96,10 @@ struct HowLongLeftWatchApp: App {
 @MainActor @Observable
 final class WatchEventModel {
     var events: [HLLEvent] = []
+    /// Pre-partitioned arrays keep the watch list body free of collection work.
+    /// They change only at an event boundary or after a source refresh.
+    var currentEvents: [HLLEvent] = []
+    var upcomingEvents: [HLLEvent] = []
     var calendars: [(id: String, preference: HLLCalendarPreference)] = []
     var hiddenAnnotations: [HLLEventAnnotation] = []
     var notificationPreferences = HLLNotificationPreferences(context: "watch.notifications")
@@ -68,15 +112,9 @@ final class WatchEventModel {
     private var runtime: HLLRuntime?
     private var revisionTask: Task<Void, Never>?
     private var purchaseTask: Task<Void, Never>?
+    private var boundaryTask: Task<Void, Never>?
+    private var sourceChangeTask: Task<Void, Never>?
     private var hasStarted = false
-
-    func currentEvents(at date: Date = .now) -> [HLLEvent] {
-        events.filter { $0.isRunning(at: date) }
-    }
-
-    func upcomingEvents(at date: Date = .now) -> [HLLEvent] {
-        events.filter { $0.start > date }
-    }
 
     func event(withID id: UUID) -> HLLEvent? {
         events.first { $0.id == id }
@@ -91,19 +129,21 @@ final class WatchEventModel {
             needsCalendarAccess = true
             isLoading = false
         }
-        let quickEvents = Task.detached(priority: .userInitiated) {
+        let quickSnapshot = Task.detached(priority: .userInitiated) {
             let payload = HLLWidgetSnapshotStore(
                 groupIdentifier: HLLConfiguration.appGroupIdentifier).read()
             let now = Date()
-            return payload?.query(HLLEventQuery(
+            return payload?.launchSnapshot(query: HLLEventQuery(
                 interval: DateInterval(start: now.addingTimeInterval(-86_400),
                                        end: now.addingTimeInterval(14 * 86_400)),
-                rule: .and([.source(.user), .upcoming(now)]), context: "watch.main"))
+                rule: .upcoming(now), context: "watch.main"))
         }
         Task { [weak self] in
-            guard let events = await quickEvents.value else { return }
+            guard let snapshot = await quickSnapshot.value else { return }
             guard let self, self.isLoading else { return }
-            self.events = events
+            self.apply(snapshot.events, at: .now)
+            self.calendars = snapshot.calendars.map { ($0.id.uuidString, $0) }
+            self.hiddenAnnotations = snapshot.hiddenAnnotations
             self.isLoading = false
         }
         Task { [weak self] in
@@ -147,9 +187,12 @@ final class WatchEventModel {
             purchaseTask = Task { [weak self] in
                 for await snapshot in await runtime.purchases.changes() {
                     guard let self else { return }
+                    let changed = !self.purchaseSnapshot.hasSameEntitlements(as: snapshot)
                     self.purchaseSnapshot = snapshot
-                    WidgetCenter.shared.reloadAllTimelines()
-                    await self.reconcileNotifications(using: runtime)
+                    if changed {
+                        WidgetCenter.shared.reloadAllTimelines()
+                        await self.reconcileNotifications(using: runtime)
+                    }
                 }
             }
         }
@@ -186,7 +229,12 @@ final class WatchEventModel {
 
     func sourceChanged() {
         guard let runtime else { return }
-        Task { await runtime.engine.invalidate() }
+        sourceChangeTask?.cancel()
+        sourceChangeTask = Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            await runtime.engine.invalidate()
+        }
     }
 
     func refresh() async {
@@ -196,7 +244,7 @@ final class WatchEventModel {
             let interval = DateInterval(start: now.addingTimeInterval(-86_400),
                                         end: now.addingTimeInterval(14 * 86_400))
             let query = HLLEventQuery(interval: interval, rule: .upcoming(now), context: "watch.main")
-            events = try await runtime.engine.query(query, now: now).events
+            let refreshedEvents = try await runtime.engine.query(query, now: now).events
             let available = await runtime.eventKit.calendars()
             let bound = try await runtime.repository.bind(available)
             calendars = available.compactMap { info in
@@ -206,6 +254,7 @@ final class WatchEventModel {
                 .filter { $0.kind == .hidden }
             notificationPreferences = try await runtime.repository.notificationPreferences()
             needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
+            apply(refreshedEvents, at: now)
             isLoading = false
             if try await runtime.publishWidgetSnapshot() {
                 WidgetCenter.shared.reloadTimelines(ofKind: "HowLongLeftComplications")
@@ -214,6 +263,27 @@ final class WatchEventModel {
         } catch {
             errorMessage = error.localizedDescription
             isLoading = false
+        }
+    }
+
+    /// Reclassifies an already-loaded array in memory. An event starting or
+    /// ending should update the UI immediately without reopening EventKit,
+    /// Core Data, CloudKit, or StoreKit.
+    private func apply(_ newEvents: [HLLEvent], at date: Date) {
+        events = newEvents
+        currentEvents = newEvents.filter { $0.status(at: date) == .inProgress }
+        upcomingEvents = newEvents.filter { $0.status(at: date) == .upcoming }
+        scheduleNextBoundary(after: date)
+    }
+
+    private func scheduleNextBoundary(after date: Date) {
+        boundaryTask?.cancel()
+        guard let next = events.lazy.flatMap({ [$0.start, $0.end] })
+            .filter({ $0 > date }).min() else { return }
+        boundaryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0.1, next.timeIntervalSinceNow + 0.05)))
+            guard !Task.isCancelled, let self else { return }
+            self.apply(self.events, at: .now)
         }
     }
 
@@ -229,7 +299,6 @@ final class WatchEventModel {
                     expiresAt: scope == .occurrence ? event.end.addingTimeInterval(90 * 86_400) : nil,
                     syncAcrossDevices: settings.syncEventAnnotations && event.portableKey != nil)
                 try await runtime.engine.save(annotation)
-                await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -239,7 +308,6 @@ final class WatchEventModel {
         Task {
             do {
                 try await runtime.engine.removeAnnotation(id: annotation.id)
-                await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -250,7 +318,6 @@ final class WatchEventModel {
         Task {
             do {
                 try await runtime.engine.deleteUserEvent(id: definitionID)
-                await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -262,7 +329,6 @@ final class WatchEventModel {
             do {
                 try await runtime.engine.setCalendarVisibility(profileID: calendar.id,
                                                                 context: context, isVisible: visible)
-                await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -279,7 +345,6 @@ final class WatchEventModel {
                                                             duration: duration,
                                                             isAllDay: isAllDay,
                                                             recurrence: recurrence))
-                await refresh()
             } catch { errorMessage = error.localizedDescription }
         }
     }

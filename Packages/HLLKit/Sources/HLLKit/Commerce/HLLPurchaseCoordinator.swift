@@ -229,11 +229,18 @@ public actor HLLPurchaseCoordinator {
     }
 
     private func publish(_ next: HLLPurchaseSnapshot) async {
+        let changed = !snapshot.hasSameEntitlements(as: next)
         snapshot = next
-        for continuation in streams.values { continuation.yield(next) }
-        await snapshotStore.persist(next)
+        if changed {
+            for continuation in streams.values { continuation.yield(next) }
+            await snapshotStore.persist(next)
+        } else {
+            // Keep the verification time fresh for offline extension reads
+            // without creating an identical CloudKit write every app launch.
+            try? snapshotStore.writeLocal(next)
+        }
 #if canImport(WatchConnectivity)
-        watchBridge?.send(next)
+        if changed { watchBridge?.send(next) }
 #endif
     }
 

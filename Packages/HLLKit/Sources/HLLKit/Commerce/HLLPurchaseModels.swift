@@ -139,6 +139,12 @@ public struct HLLPurchaseSnapshot: Codable, Hashable, Sendable {
         entitlement(for: feature).isActive(at: date)
     }
 
+    /// Transport metadata changes on every verification. Consumers and sync
+    /// only need an update when effective product evidence or dates changed.
+    public func hasSameEntitlements(as other: Self) -> Bool {
+        features == other.features
+    }
+
     public func replacing(source: HLLPurchaseSnapshotSource) -> Self {
         Self(revision: revision, checkedAt: checkedAt, source: source, features: features)
     }
