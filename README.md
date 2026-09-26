@@ -43,6 +43,8 @@ Maintenance is bounded and infrequent: expired occurrence annotations, old local
 
 The app also writes the latest extension projection to one replaceable private CloudKit record. Extensions try that record with a short timeout and select the newest result between CloudKit and the local App Group snapshot. If the account is offline or unavailable, the local snapshot remains usable.
 
+A second small CloudKit record contains only portable shared settings: synced user-event definitions, calendar profiles and visibility, and portable hidden/pinned annotations. iOS and watchOS merge this overlay with their own EventKit projection, so a complication can learn about a cross-device setting change without importing the other platform's calendar IDs.
+
 `NSPersistentCloudKitContainer` is used for durable app data, not opened by extensions. This keeps Core Data's import/export machinery in one process and avoids the multi-process mirroring races that can make an extension hang or duplicate records. HLLKit enables persistent history and remote-change notifications, uses separate Cloud and Local configurations, upserts by logical key, and prunes only old exported history. Replaceable App Group and CloudKit projections are used where a timeline extension needs a tiny, bounded read.
 
 ## Paid capabilities

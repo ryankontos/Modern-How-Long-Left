@@ -132,6 +132,27 @@ public actor HLLRepository {
         return Array(byID.values)
     }
 
+    /// Builds the portable portion of settings for extensions on another
+    /// device. Device-local EventKit IDs are intentionally not included.
+    public func sharedSettingsProjection(revision: UInt64,
+                                         generatedAt: Date = .now) async throws -> HLLSharedSettingsProjection {
+        async let appSettings = settings()
+        async let profiles = calendarPreferences()
+        async let events = userEvents()
+        async let annotations = annotations()
+        let allAnnotations = try await annotations
+        let syncedAnnotations = allAnnotations.filter {
+            $0.syncAcrossDevices && $0.portableKey != nil
+        }
+        return HLLSharedSettingsProjection(
+            revision: revision,
+            generatedAt: generatedAt,
+            settings: try await appSettings,
+            calendars: try await profiles,
+            userDefinitions: try await events,
+            annotations: syncedAnnotations)
+    }
+
     public func save(_ preference: HLLCalendarPreference) async throws {
         var metadata = preference
         metadata.visibility = [:]

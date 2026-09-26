@@ -78,6 +78,30 @@ import Testing
     #expect(try await repository.widgetDefaults() == defaults)
 }
 
+@Test func sharedProjectionKeepsPortableDataOnly() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try await HLLDatabase.open(directory: directory, cloudContainerIdentifier: nil)
+    let repository = HLLRepository(database: database)
+    let profile = HLLCalendarPreference(title: "Home", sourceTitle: "iCloud")
+    let userEvent = HLLUserEvent(title: "Personal", start: .now, duration: 600)
+    let portable = HLLEventAnnotation(kind: .hidden, scope: .occurrence,
+                                       portableKey: "profile|event|occurrence")
+    let localOnly = HLLEventAnnotation(kind: .hidden, scope: .occurrence,
+                                       eventID: UUID())
+
+    try await repository.save(profile)
+    try await repository.save(userEvent)
+    try await repository.save(portable)
+    try await repository.save(localOnly)
+
+    let projection = try await repository.sharedSettingsProjection(revision: 4)
+    #expect(projection.revision == 4)
+    #expect(projection.calendars.contains(profile))
+    #expect(projection.userDefinitions.contains(userEvent))
+    #expect(projection.annotations == [portable])
+}
+
 @Test func recurrenceHandlesWeekAlignmentAndMonthEnd() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!

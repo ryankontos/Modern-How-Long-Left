@@ -13,6 +13,8 @@ public actor HLLEventKitSource {
         public let localID: String?
         public let externalID: String?
         public let calendarLocalID: String
+        public let calendarTitle: String
+        public let calendarSourceTitle: String
         public let title: String
         public let start: Date
         public let end: Date
@@ -52,6 +54,8 @@ public actor HLLEventKitSource {
             RawEvent(localID: event.eventIdentifier,
                      externalID: event.calendarItemExternalIdentifier,
                      calendarLocalID: event.calendar.calendarIdentifier,
+                     calendarTitle: event.calendar.title,
+                     calendarSourceTitle: event.calendar.source.title,
                      title: event.title ?? "Untitled Event",
                      start: event.startDate, end: event.endDate,
                      occurrenceStart: event.occurrenceDate ?? event.startDate,

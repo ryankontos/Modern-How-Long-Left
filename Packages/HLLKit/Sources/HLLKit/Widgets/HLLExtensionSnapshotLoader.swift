@@ -8,9 +8,15 @@ public struct HLLExtensionSnapshotLoader: Sendable {
     public func load(groupIdentifier: String, cloudContainerIdentifier: String? = nil,
                      now: Date = .now) async -> HLLWidgetPayload? {
         let cached = HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier).read()
-        let cloud = await cloudProjection(cloudContainerIdentifier)
-        let seed = [cached, cloud].compactMap { $0 }
+        // Both records have the same short deadline. Fetching them together
+        // prevents a settings projection from adding another CloudKit wait.
+        async let cloudTask = cloudProjection(cloudContainerIdentifier)
+        async let sharedTask = sharedProjection(cloudContainerIdentifier)
+        let cloud = await cloudTask
+        let shared = await sharedTask
+        let platformSeed = [cached, cloud].compactMap { $0 }
             .max { $0.generatedAt < $1.generatedAt }
+        let seed = merge(shared: shared, into: platformSeed, now: now)
         let source = HLLEventKitSource()
         let interval = DateInterval(start: now.addingTimeInterval(-86_400),
                                     end: now.addingTimeInterval(14 * 86_400))
@@ -18,6 +24,13 @@ public struct HLLExtensionSnapshotLoader: Sendable {
         guard authorized else { return expandUserEvents(in: seed, interval: interval, now: now) }
 
         let raw = await source.events(in: interval)
+        let sharedProfiles = shared?.calendars ?? []
+        var calendars = seed?.calendars ?? [:]
+        for event in raw {
+            if let profile = matchingProfile(for: event, in: sharedProfiles) {
+                calendars[event.calendarLocalID] = profile
+            }
+        }
         let existingByPortable = Dictionary((seed?.events ?? []).compactMap { event in
             event.portableKey.map { ($0, event) }
         }, uniquingKeysWith: { first, _ in first })
@@ -27,7 +40,7 @@ public struct HLLExtensionSnapshotLoader: Sendable {
         var normalized: [HLLEvent] = []
         normalized.reserveCapacity(raw.count)
         for event in raw {
-            let profile = seed?.calendars[event.calendarLocalID]
+            let profile = calendars[event.calendarLocalID]
             let occurrence = String(event.occurrenceStart.timeIntervalSince1970)
             let portable = event.externalID.flatMap { external in
                 profile.map { "\($0.id.uuidString)|\(external)|\(occurrence)" }
@@ -51,7 +64,7 @@ public struct HLLExtensionSnapshotLoader: Sendable {
         return HLLWidgetPayload(revision: seed?.revision ?? 0, generatedAt: now,
                                 expiresAt: interval.end, events: normalized + user,
                                 userDefinitions: seed?.userDefinitions ?? [],
-                                calendars: seed?.calendars ?? [:],
+                                calendars: calendars,
                                 annotations: seed?.annotations ?? [])
     }
 
@@ -68,6 +81,57 @@ public struct HLLExtensionSnapshotLoader: Sendable {
             group.cancelAll()
             return value
         }
+    }
+
+    private func sharedProjection(_ identifier: String?) async -> HLLSharedSettingsProjection? {
+        guard let identifier, !identifier.isEmpty else { return nil }
+        return await withTaskGroup(of: HLLSharedSettingsProjection?.self) { group in
+            group.addTask { await HLLSharedSettingsProjectionStore(
+                containerIdentifier: identifier).read() }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(1.5))
+                return nil
+            }
+            let value = await group.next() ?? nil
+            group.cancelAll()
+            return value
+        }
+    }
+
+    private func merge(shared: HLLSharedSettingsProjection?,
+                       into platform: HLLWidgetPayload?,
+                       now: Date) -> HLLWidgetPayload? {
+        guard let shared else { return platform }
+        if let platform, platform.generatedAt > shared.generatedAt {
+            return platform
+        }
+        var calendars = platform?.calendars ?? [:]
+        // Shared profiles are keyed by UUID until local EventKit IDs are
+        // available. The direct EventKit pass below binds them by title/source.
+        for profile in shared.calendars {
+            calendars[profile.id.uuidString] = profile
+        }
+        // Preserve already-bound local IDs when the extension has no calendar
+        // permission yet. This keeps hidden/visibility rules effective while
+        // still allowing the next authorized refresh to rebind by name.
+        for (localID, existing) in platform?.calendars ?? [:]
+            where shared.calendars.contains(where: { $0.id == existing.id }) {
+            calendars[localID] = shared.calendars.first { $0.id == existing.id } ?? existing
+        }
+        return HLLWidgetPayload(revision: shared.revision, generatedAt: shared.generatedAt,
+                                expiresAt: platform?.expiresAt ?? now.addingTimeInterval(14 * 86_400),
+                                events: platform?.events ?? [],
+                                userDefinitions: shared.userDefinitions,
+                                calendars: calendars,
+                                annotations: shared.annotations)
+    }
+
+    private func matchingProfile(for event: HLLEventKitSource.RawEvent,
+                                 in profiles: [HLLCalendarPreference]) -> HLLCalendarPreference? {
+        let matches = profiles.filter {
+            $0.title == event.calendarTitle && $0.sourceTitle == event.calendarSourceTitle
+        }
+        return matches.count == 1 ? matches[0] : nil
     }
 
     private func expandUserEvents(in cached: HLLWidgetPayload?, interval: DateInterval,
