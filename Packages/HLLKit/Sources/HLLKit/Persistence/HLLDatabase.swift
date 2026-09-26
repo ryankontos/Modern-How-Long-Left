@@ -5,7 +5,7 @@ import Foundation
 public actor HLLDatabase {
     public enum Location: Sendable { case cloud, local }
     public enum RecordKind: String, Sendable {
-        case preference, widgetDefaults, notificationPreferences, calendar, calendarVisibility, userEvent, annotation, calendarBinding, eventIdentity, activityPolicy
+        case preference, widgetDefaults, notificationPreferences, calendar, calendarVisibility, userEvent, annotation, calendarBinding, eventIdentity, activityPolicy, syncMetadata
     }
 
     private let container: NSPersistentCloudKitContainer

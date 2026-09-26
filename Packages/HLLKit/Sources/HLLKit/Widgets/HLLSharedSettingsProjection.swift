@@ -9,18 +9,22 @@ import Foundation
 public struct HLLSharedSettingsProjection: Codable, Sendable, Equatable {
     public let revision: UInt64
     public let generatedAt: Date
+    /// Latest logical portable-data mutation, including deletions.
+    public let contentUpdatedAt: Date
     public let settings: HLLAppSettings
     public let calendars: [HLLCalendarPreference]
     public let userDefinitions: [HLLUserEvent]
     public let annotations: [HLLEventAnnotation]
 
     public init(revision: UInt64, generatedAt: Date = .now,
+                contentUpdatedAt: Date = .distantPast,
                 settings: HLLAppSettings,
                 calendars: [HLLCalendarPreference],
                 userDefinitions: [HLLUserEvent],
                 annotations: [HLLEventAnnotation]) {
         self.revision = revision
         self.generatedAt = generatedAt
+        self.contentUpdatedAt = contentUpdatedAt
         self.settings = settings
         self.calendars = calendars
         self.userDefinitions = userDefinitions
@@ -86,6 +90,7 @@ public struct HLLSharedSettingsProjectionStore: Sendable {
             let update: (CKRecord) -> Void = { record in
                 record["payload"] = payload
                 record["generatedAt"] = projection.generatedAt as CKRecordValue
+                record["contentUpdatedAt"] = projection.contentUpdatedAt as CKRecordValue
                 record["revision"] = projection.revision as CKRecordValue
             }
             try await saveReplacing(projection: projection, recordID: recordID,
@@ -100,6 +105,8 @@ public struct HLLSharedSettingsProjectionStore: Sendable {
                                update: (CKRecord) -> Void) async throws {
         do {
             let record = try await database.record(for: recordID)
+            if let serverDate = record["contentUpdatedAt"] as? Date,
+               serverDate > projection.contentUpdatedAt { return }
             if let data = record["payload"] as? Data,
                let existing = try? JSONDecoder().decode(HLLSharedSettingsProjection.self, from: data),
                projection.hasSameContent(as: existing) {
@@ -110,6 +117,8 @@ public struct HLLSharedSettingsProjectionStore: Sendable {
                 _ = try await database.save(record)
             } catch let error as CKError where error.code == .serverRecordChanged {
                 let latest = try await database.record(for: recordID)
+                if let serverDate = latest["contentUpdatedAt"] as? Date,
+                   serverDate > projection.contentUpdatedAt { return }
                 if let data = latest["payload"] as? Data,
                    let existing = try? JSONDecoder().decode(HLLSharedSettingsProjection.self, from: data),
                    projection.hasSameContent(as: existing) {
@@ -125,6 +134,8 @@ public struct HLLSharedSettingsProjectionStore: Sendable {
                 _ = try await database.save(record)
             } catch let conflict as CKError where conflict.code == .serverRecordChanged {
                 let latest = try await database.record(for: recordID)
+                if let serverDate = latest["contentUpdatedAt"] as? Date,
+                   serverDate > projection.contentUpdatedAt { return }
                 update(latest)
                 _ = try await database.save(latest)
             }

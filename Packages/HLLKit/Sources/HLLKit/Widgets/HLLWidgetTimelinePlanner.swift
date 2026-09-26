@@ -12,6 +12,7 @@ public struct HLLWidgetTimelinePlanner: Sendable {
     public func plan(payload: HLLWidgetPayload?, now: Date, context: HLLContextID,
                      limit: Int, updateProgress: Bool = false,
                      sortOrder: HLLWidgetSortOrder = .countdownDate,
+                     prioritizeInProgress: Bool = false,
                      rule: @Sendable (Date) -> HLLEventRule) -> [HLLWidgetTimelinePoint] {
         guard let payload else { return [HLLWidgetTimelinePoint(date: now, events: [])] }
         // Align the timeline to calendar days. Its membership stays identical
@@ -31,7 +32,19 @@ public struct HLLWidgetTimelinePlanner: Sendable {
             let events = reducer.reduce(index, query: query,
                                         calendarPreferences: payload.calendars,
                                         annotations: payload.annotations)
-            return Array(sortOrder.sort(events, at: date).prefix(max(0, limit)))
+            let sorted = sortOrder.sort(events, at: date)
+            // "Current or Next" has stronger semantics than a plain sort: an
+            // active event wins even when another event starts sooner than it
+            // ends. The dedicated soonest-countdown mode intentionally does
+            // the opposite comparison.
+            let ordered: [HLLEvent]
+            if prioritizeInProgress {
+                ordered = sorted.filter { $0.status(at: date) == .inProgress }
+                    + sorted.filter { $0.status(at: date) != .inProgress }
+            } else {
+                ordered = sorted
+            }
+            return Array(ordered.prefix(max(0, limit)))
         }
 
         // Filter durable visibility once before collecting transitions. Use an

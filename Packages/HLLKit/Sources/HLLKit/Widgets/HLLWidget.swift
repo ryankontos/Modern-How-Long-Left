@@ -112,15 +112,20 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
         let sortOrder = configuration.sortOrder
         let selectedID = configuration.event?.id
         let includeAllDay = configuration.includeAllDay
-        let count = (mode == .current || mode == .soonestCountdown)
+        let count = (selectedID != nil || mode == .current || mode == .soonestCountdown)
             ? 1 : min(max(configuration.count, 1), 6)
         let points = HLLWidgetTimelinePlanner().plan(
             payload: payload, now: now, context: contextID,
             limit: count,
             updateProgress: configuration.style == .progress || configuration.style == .detailed,
             sortOrder: mode == .soonestCountdown ? .countdownDate : sortOrder,
+            prioritizeInProgress: selectedID == nil && mode == .current,
             rule: { date in
-                var rules: [HLLEventRule] = [mode.rule(at: date)]
+                // A specifically selected event is its own display mode. Keep
+                // it visible while upcoming or running, regardless of the
+                // general picker value retained by WidgetKit.
+                var rules: [HLLEventRule] = [.upcoming(date)]
+                if selectedID == nil { rules[0] = mode.rule(at: date) }
                 if !includeAllDay { rules.append(.allDay(false)) }
                 if let selectedID {
                     rules.append(.custom {

@@ -11,6 +11,12 @@ public struct HLLCalendarBinding: Codable, Sendable {
     public let profileID: UUID
 }
 
+/// One mirrored timestamp protects the replaceable extension projection from
+/// stale whole-document writes. It advances only after portable data changes.
+private struct HLLSharedProjectionMetadata: Codable, Sendable {
+    let updatedAt: Date
+}
+
 /// Small, typed methods keep storage details out of the event pipeline and UI.
 public actor HLLRepository {
     private let database: HLLDatabase
@@ -25,6 +31,7 @@ public actor HLLRepository {
 
     public func save(_ settings: HLLAppSettings) async throws {
         try await database.put(settings, kind: .preference, key: "app", location: .cloud)
+        try await touchSharedProjection()
     }
 
     public func widgetDefaults() async throws -> HLLWidgetDefaults {
@@ -55,10 +62,12 @@ public actor HLLRepository {
 
     public func save(_ event: HLLUserEvent) async throws {
         try await database.put(event, kind: .userEvent, key: event.id.uuidString, location: .cloud)
+        try await touchSharedProjection()
     }
 
     public func deleteUserEvent(id: UUID) async throws {
         try await database.remove(kind: .userEvent, key: id.uuidString, location: .cloud)
+        try await touchSharedProjection()
     }
 
     /// Live Activity scheduling is device specific, so policies stay in the local store.
@@ -93,11 +102,13 @@ public actor HLLRepository {
             ? .cloud : .local
         try await database.put(annotation, kind: .annotation,
                                key: annotation.id.uuidString, location: location)
+        if location == .cloud { try await touchSharedProjection() }
     }
 
     public func deleteAnnotation(id: UUID) async throws {
         try await database.remove(kind: .annotation, key: id.uuidString, location: .cloud)
         try await database.remove(kind: .annotation, key: id.uuidString, location: .local)
+        try await touchSharedProjection()
     }
 
     public func setAnnotationSync(_ enabled: Bool) async throws {
@@ -151,6 +162,8 @@ public actor HLLRepository {
         async let profiles = calendarPreferences()
         async let events = userEvents()
         async let annotations = annotations()
+        async let metadata: [HLLSharedProjectionMetadata] = database.all(
+            HLLSharedProjectionMetadata.self, kind: .syncMetadata, location: .cloud)
         let allAnnotations = try await annotations
         let syncedAnnotations = allAnnotations.filter {
             $0.syncAcrossDevices && $0.portableKey != nil
@@ -158,6 +171,7 @@ public actor HLLRepository {
         return HLLSharedSettingsProjection(
             revision: revision,
             generatedAt: generatedAt,
+            contentUpdatedAt: try await metadata.first?.updatedAt ?? .distantPast,
             settings: try await appSettings,
             calendars: try await profiles,
             userDefinitions: try await events,
@@ -169,6 +183,7 @@ public actor HLLRepository {
         metadata.visibility = [:]
         try await database.put(metadata, kind: .calendar,
                                key: preference.id.uuidString, location: .cloud)
+        try await touchSharedProjection()
     }
 
     public func setCalendarVisibility(profileID: UUID, context: HLLContextID,
@@ -177,6 +192,7 @@ public actor HLLRepository {
                                              context: context, isVisible: isVisible)
         try await database.put(rule, kind: .calendarVisibility,
                                key: rule.storageKey, location: .cloud)
+        try await touchSharedProjection()
     }
 
     /// Local bindings separate a synced calendar profile from volatile EventKit IDs.
@@ -240,5 +256,11 @@ public actor HLLRepository {
             try await database.remove(kind: .calendarBinding,
                                       key: binding.localCalendarID, location: .local)
         }
+    }
+
+    private func touchSharedProjection() async throws {
+        try await database.put(HLLSharedProjectionMetadata(updatedAt: .now),
+                               kind: .syncMetadata,
+                               key: "shared-projection", location: .cloud)
     }
 }

@@ -182,15 +182,12 @@ final class HLLAppModel {
             let interval = DateInterval(start: now.addingTimeInterval(-86_400),
                                         end: now.addingTimeInterval(30 * 86_400))
             let query = HLLEventQuery(interval: interval, rule: .upcoming(now), context: "home.main")
-            let snapshot = try await runtime.engine.query(query, now: now)
-            apply(snapshot.events, at: now)
-            let available = await runtime.eventKit.calendars()
-            let bound = try await runtime.repository.bind(available)
-            calendars = available.compactMap { info in
-                bound[info.localID].map { (id: info.localID, preference: $0) }
-            }
-            hiddenAnnotations = try await runtime.repository.annotations()
-                .filter { $0.kind == .hidden }
+            // This result already contains the calendars and annotations used
+            // to compose the list, so the UI never repeats those database reads.
+            let result = try await runtime.engine.queryResult(query, now: now)
+            apply(result.snapshot.events, at: now)
+            calendars = result.calendars.map { (id: $0.localID, preference: $0.preference) }
+            hiddenAnnotations = result.annotations.filter { $0.kind == .hidden }
             annotationSyncEnabled = try await runtime.repository.settings().syncEventAnnotations
             activityPolicies = try await runtime.repository.activityPolicies()
             widgetDefaults = try await runtime.repository.widgetDefaults()

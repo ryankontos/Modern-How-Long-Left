@@ -238,6 +238,7 @@ public actor HLLPurchaseCoordinator {
             // Keep the verification time fresh for offline extension reads
             // without creating an identical CloudKit write every app launch.
             try? snapshotStore.writeLocal(next)
+            await snapshotStore.retryPendingCloudWrite()
         }
 #if canImport(WatchConnectivity)
         if changed { watchBridge?.send(next) }

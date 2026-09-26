@@ -309,6 +309,7 @@ import Testing
                  start: start.addingTimeInterval(TimeInterval(index * 60)),
                  end: start.addingTimeInterval(TimeInterval(index * 60 + 30)))
     }
+
     let pinned = HLLWidgetPayload(revision: 1, generatedAt: start,
                                   expiresAt: start.addingTimeInterval(86_400),
                                   events: events, userDefinitions: [], calendars: [:],
@@ -316,6 +317,25 @@ import Testing
     let limited = pinned.limitingEvents(to: 2)
     #expect(limited.events.count == 2)
     #expect(limited.events.contains(events[3]))
+}
+
+@Test func currentWidgetModePrefersRunningEventOverSoonerFutureStart() {
+    let now = Date(timeIntervalSince1970: 12_000)
+    let running = HLLEvent(id: UUID(), source: .user, title: "Running",
+                           start: now.addingTimeInterval(-600),
+                           end: now.addingTimeInterval(3_600))
+    let soon = HLLEvent(id: UUID(), source: .user, title: "Soon",
+                        start: now.addingTimeInterval(300),
+                        end: now.addingTimeInterval(900))
+    let payload = HLLWidgetPayload(revision: 1, generatedAt: now,
+                                   expiresAt: now.addingTimeInterval(7_200),
+                                   events: [soon, running], userDefinitions: [],
+                                   calendars: [:], annotations: [])
+    let point = HLLWidgetTimelinePlanner().plan(
+        payload: payload, now: now, context: "test", limit: 1,
+        sortOrder: .countdownDate, prioritizeInProgress: true,
+        rule: { .upcoming($0) }).first
+    #expect(point?.events.first?.id == running.id)
 }
 
 private enum HLLAnnotationForTest {
