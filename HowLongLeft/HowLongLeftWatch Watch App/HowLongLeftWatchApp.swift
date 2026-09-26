@@ -222,4 +222,21 @@ final class WatchEventModel {
             } catch { errorMessage = error.localizedDescription }
         }
     }
+
+    /// Personal events are stored in the same CloudKit-backed repository as
+    /// iPhone-created events, so a watch-created event can appear on every
+    /// device without requiring the iPhone to be reachable.
+    func addUserEvent(title: String, start: Date, duration: TimeInterval,
+                      isAllDay: Bool = false, recurrence: HLLRecurrenceRule?) {
+        guard let runtime else { return }
+        Task {
+            do {
+                try await runtime.engine.save(HLLUserEvent(title: title, start: start,
+                                                            duration: duration,
+                                                            isAllDay: isAllDay,
+                                                            recurrence: recurrence))
+                await refresh()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
 }
