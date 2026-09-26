@@ -66,9 +66,11 @@ public struct HLLSharedSettingsProjectionStore: Sendable {
     public static let recordName = "hll.shared-settings.current"
 
     private let containerIdentifier: String
+    private let groupIdentifier: String?
 
-    public init(containerIdentifier: String) {
+    public init(containerIdentifier: String, groupIdentifier: String? = nil) {
         self.containerIdentifier = containerIdentifier
+        self.groupIdentifier = groupIdentifier
     }
 
     public func read() async -> HLLSharedSettingsProjection? {
@@ -95,9 +97,18 @@ public struct HLLSharedSettingsProjectionStore: Sendable {
             }
             try await saveReplacing(projection: projection, recordID: recordID,
                                     database: database, update: update)
+            removePendingWrite(upTo: projection)
         } catch {
-            // A later app refresh retries. The platform projection remains usable.
+            // Keep only the newest failed projection so another app refresh can retry.
+            savePendingWrite(projection)
         }
+    }
+
+    /// Retry only after an earlier save failed. The common no-outbox path is a
+    /// local file check and never adds CloudKit traffic to a normal refresh.
+    public func retryPendingWrite() async {
+        guard let projection = readPendingWrite() else { return }
+        await write(projection)
     }
 
     private func saveReplacing(projection: HLLSharedSettingsProjection,
@@ -140,5 +151,41 @@ public struct HLLSharedSettingsProjectionStore: Sendable {
                 _ = try await database.save(latest)
             }
         }
+    }
+
+    private func pendingWriteURL() -> URL? {
+        guard let groupIdentifier, !groupIdentifier.isEmpty else { return nil }
+        return FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: groupIdentifier)?
+            .appending(path: "HLLSharedSettingsOutbox.json")
+    }
+
+    private func readPendingWrite() -> HLLSharedSettingsProjection? {
+        guard let url = pendingWriteURL(), let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(HLLSharedSettingsProjection.self, from: data)
+    }
+
+    private func savePendingWrite(_ projection: HLLSharedSettingsProjection) {
+        guard let url = pendingWriteURL(),
+              let data = try? JSONEncoder().encode(projection) else { return }
+        if let pending = readPendingWrite(), isNewer(pending, than: projection) { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// A successful or already-superseded upload clears only an older outbox
+    /// value. A newer queued change must stay available for its own upload.
+    private func removePendingWrite(upTo completed: HLLSharedSettingsProjection) {
+        guard let url = pendingWriteURL(),
+              let pending = readPendingWrite(),
+              !isNewer(pending, than: completed) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func isNewer(_ lhs: HLLSharedSettingsProjection,
+                         than rhs: HLLSharedSettingsProjection) -> Bool {
+        if lhs.contentUpdatedAt != rhs.contentUpdatedAt {
+            return lhs.contentUpdatedAt > rhs.contentUpdatedAt
+        }
+        return lhs.generatedAt > rhs.generatedAt
     }
 }

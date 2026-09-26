@@ -17,6 +17,7 @@ public actor HLLRuntime {
 #endif
     private let cloudContainerIdentifier: String?
     private var lastSharedSettingsProjection: HLLSharedSettingsProjection?
+    private var sharedSettingsWriteTask: Task<Void, Never>?
 
     #if canImport(UserNotifications)
     private init(eventKit: HLLEventKitSource, repository: HLLRepository,
@@ -170,6 +171,9 @@ public actor HLLRuntime {
         // Otherwise a fast extension launch could merge an older CloudKit
         // document over the App Group snapshot that was just published.
         HLLSharedSettingsCacheStore(groupIdentifier: widgetStore.groupIdentifier).write(projection)
+        let store = HLLSharedSettingsProjectionStore(
+            containerIdentifier: cloudContainerIdentifier,
+            groupIdentifier: widgetStore.groupIdentifier)
         if let previous = lastSharedSettingsProjection,
            previous.revision > projection.revision {
             return
@@ -180,12 +184,32 @@ public actor HLLRuntime {
                 && $0.userDefinitions == projection.userDefinitions
                 && $0.annotations == projection.annotations
         } ?? false
-        guard !unchanged else { return }
+        if unchanged {
+            queueSharedSettingsRetry(using: store)
+            return
+        }
         lastSharedSettingsProjection = projection
-        // Network propagation remains off the launch and WidgetKit path.
-        Task.detached(priority: .utility) {
-            await HLLSharedSettingsProjectionStore(
-                containerIdentifier: cloudContainerIdentifier).write(projection)
+        queueSharedSettingsWrite(projection, using: store)
+    }
+
+    /// Serialize cloud writes so an older detached task cannot overtake a
+    /// newer settings snapshot. These tasks never delay the widget snapshot.
+    private func queueSharedSettingsWrite(_ projection: HLLSharedSettingsProjection,
+                                          using store: HLLSharedSettingsProjectionStore) {
+        let previous = sharedSettingsWriteTask
+        sharedSettingsWriteTask = Task.detached(priority: .utility) {
+            await previous?.value
+            await store.write(projection)
+        }
+    }
+
+    /// A local outbox check is cheap. CloudKit is contacted only if an earlier
+    /// write failed, such as while this device was offline.
+    private func queueSharedSettingsRetry(using store: HLLSharedSettingsProjectionStore) {
+        let previous = sharedSettingsWriteTask
+        sharedSettingsWriteTask = Task.detached(priority: .utility) {
+            await previous?.value
+            await store.retryPendingWrite()
         }
     }
 }
