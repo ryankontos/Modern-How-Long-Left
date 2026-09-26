@@ -27,7 +27,11 @@ enum HLLBackgroundRefresh {
     static func schedule() {
         let request = BGAppRefreshTaskRequest(identifier: identifier)
         request.earliestBeginDate = Date().addingTimeInterval(15 * 60)
-        try? BGTaskScheduler.shared.submit(request)
+        // Submission is asynchronous on current iOS. The scheduler may defer
+        // the request; WidgetKit's own timeline remains the normal refresh path.
+        Task {
+            try? await BGTaskScheduler.shared.submitTaskRequest(request)
+        }
     }
 
     private static func handle(_ task: BGAppRefreshTask) {

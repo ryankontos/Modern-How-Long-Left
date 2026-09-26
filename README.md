@@ -30,6 +30,27 @@ HowLongLeft.xcworkspace/
 
 `EKEvent` never crosses the HLLKit boundary. Stable identities are resolved from EventKit identifiers, occurrence dates, and a conservative fingerprint fallback. A portable key is retained when a calendar profile and EventKit external identifier make cross-device matching safe.
 
+## Reading the code
+
+Start with the value types in `Packages/HLLKit/Sources/HLLKit/Domain/`. `HLLEvent` is the event the rest of the app understands; `HLLEventQuery` describes what a caller wants; `HLLCalendarPreference` and `HLLEventAnnotation` hold visibility, hidden, and pinned choices. These types contain the shared vocabulary, not UI or database code.
+
+To follow a calendar event into the app, read these files in order:
+
+1. `EventKit/HLLEventKitSource.swift` is the only adapter that talks to EventKit. It turns EventKit results into plain sendable values.
+2. `Events/HLLEventEngine.swift` joins calendar values with personal event definitions, resolves identity, and runs the query. `Events/HLLEventIndex.swift` and `Events/HLLEventReducer.swift` handle fast filtering and visibility rules.
+3. `Runtime/HLLRuntime.swift` creates the shared services and publishes the small extension snapshot.
+4. `HowLongLeft/HLLAppModel.swift` loads the local launch snapshot first, then refreshes from HLLKit. `ContentView.swift` displays the current and upcoming lists; `EventViews.swift` contains cards and details.
+
+The refresh path follows one direction: a source notification reaches the app model, which debounces it and invalidates the engine. The engine clears its revision cache and publishes one change. The model then queries again, publishes the App Group snapshot, and asks WidgetKit to reload only when visible content changed. Start/end timers reclassify already-loaded events in memory; they do not query storage.
+
+For widgets and complications, start at `Widgets/HLLWidget.swift` for configuration, then `Widgets/HLLExtensionSnapshotLoader.swift` for a fresh platform-local EventKit read and portable settings, and `Widgets/HLLWidgetTimelinePlanner.swift` for the dated entries. `HLLWidgetEventView.swift` renders an entry. The planner owns event transitions; the provider's periodic refresh is a chance to discover edits made while apps are asleep.
+
+For storage, `Persistence/HLLRepository.swift` is the typed doorway and `Persistence/HLLDatabase.swift` owns the two Core Data stores. Callers should use repository methods rather than constructing database records. Calendar occurrences stay device-local; only portable settings and user-created event definitions sync through CloudKit.
+
+For purchases, follow `Commerce/HLLPurchaseCoordinator.swift` to see StoreKit verification, then `Commerce/HLLPurchaseSnapshotStore.swift` for the local cache, CloudKit mirror, and retry outbox. Widgets read entitlements through `Commerce/HLLPurchaseEntitlementReader.swift`; they never start the app's long-running transaction listener.
+
+The app target's SwiftUI settings are grouped by topic: `CalendarSettingsViews.swift`, `FeatureSettingsViews.swift`, `PurchaseSettingsViews.swift`, and `OtherSettingsViews.swift`. The watch target has its own model and views because watchOS uses its own EventKit calendars and must keep working without the iPhone.
+
 ## Storage
 
 `NSPersistentCloudKitContainer` owns two stores:
