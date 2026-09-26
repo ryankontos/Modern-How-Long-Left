@@ -55,7 +55,7 @@ The current shipping map retains the existing product identifiers (`HLLWidget` a
 
 Widget and complication timelines return a lock entry when the capability is unavailable, so they never expose stale event data after a revocation. The configuration intent remains explicit on watchOS 27 and offers current, in-progress, all/upcoming, all-day filtering, a selected event, and multiple countdown/progress styles. Live Activity and notification scheduling are guarded in HLLKit at their service boundaries as well as in the app UI.
 
-The iOS shell uses a UIKit app and scene delegate with a `UIHostingController` root. SwiftUI provides a Current tab with live countdowns, a separate Upcoming tab, event details, context-menu actions, and a settings sheet. The watch app has its own runtime and a compact vertical-page interface, so it continues to use watchOS calendars when the iPhone is unavailable. Both apps keep the first frame blank until the first event snapshot exists, then fade the loaded content in.
+The iOS shell uses a UIKit app and scene delegate with a `UIHostingController` root. SwiftUI provides a Current tab with live countdowns, a separate Upcoming tab, event details, context-menu actions, and a settings sheet. The watch app has its own runtime and a compact vertical-page interface, so it continues to use watchOS calendars when the iPhone is unavailable. Both app targets enable remote background notifications; their delegates rebuild the compact projection and reload WidgetKit after a CloudKit change. Both apps keep the first frame blank until the first event snapshot exists, then fade the loaded content in.
 
 ## Extensions and Live Activities
 
