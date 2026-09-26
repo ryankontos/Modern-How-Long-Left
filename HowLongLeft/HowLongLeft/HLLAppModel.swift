@@ -50,15 +50,18 @@ final class HLLAppModel {
             needsCalendarAccess = true
             isLoading = false
         }
-        // EventKit and the last App Group projection can answer before the
-        // CloudKit mirror finishes opening. This is the fast first-frame path.
+        // The last App Group projection is a local, atomic file. Read it
+        // directly for the first frame instead of waiting for CloudKit or
+        // opening EventKit. The runtime performs the authoritative refresh
+        // immediately afterward and publishes a newer projection.
         let quickEvents = Task.detached(priority: .userInitiated) {
-            let payload = await HLLExtensionSnapshotLoader().load(
-                groupIdentifier: HLLConfiguration.appGroupIdentifier, now: .now)
+            let payload = HLLWidgetSnapshotStore(
+                groupIdentifier: HLLConfiguration.appGroupIdentifier).read()
+            let now = Date()
             return payload?.query(HLLEventQuery(
-                interval: DateInterval(start: .now.addingTimeInterval(-86_400),
-                                       end: .now.addingTimeInterval(30 * 86_400)),
-                rule: .upcoming(.now), context: "home.main"))
+                interval: DateInterval(start: now.addingTimeInterval(-86_400),
+                                       end: now.addingTimeInterval(30 * 86_400)),
+                rule: .upcoming(now), context: "home.main"))
         }
         Task { [weak self] in
             guard let events = await quickEvents.value else { return }

@@ -42,14 +42,21 @@ public actor HLLEventEngine {
     public func query(_ query: HLLEventQuery, now: Date = .now) async throws -> HLLEventSnapshot {
         let calendars = await eventKit.calendars()
         let preferences = try await repository.bind(calendars)
-        let userDefinitions = try await repository.userEvents()
-        let annotations = try await repository.annotations()
-        let sourceEvents = try await eventKitEvents(in: query.interval, preferences: preferences)
+        // These reads share no mutable state. Running them together keeps
+        // launch and EventKit-change refreshes bounded by the slowest source.
+        async let userDefinitionsTask = repository.userEvents()
+        async let annotationsTask = repository.annotations()
+        async let sourceEventsTask = eventKitEvents(in: query.interval, preferences: preferences)
+        let userDefinitions = try await userDefinitionsTask
+        let annotations = try await annotationsTask
+        let sourceEvents = try await sourceEventsTask
         let userEvents = userDefinitions.flatMap {
             generator.occurrences(of: $0, in: query.interval)
         }
-        let filtered = reducer.reduce(sourceEvents + userEvents, query: query,
-                                      calendarPreferences: preferences, annotations: annotations)
+        let filtered = reducer.reduce(sourceEvents + userEvents,
+                                      query: query,
+                                      calendarPreferences: preferences,
+                                      annotations: annotations)
         return HLLEventSnapshot(revision: revision, generatedAt: now, events: filtered)
     }
 
@@ -57,13 +64,18 @@ public actor HLLEventEngine {
     public func widgetProjection(in interval: DateInterval, now: Date = .now) async throws -> HLLWidgetPayload {
         let calendars = await eventKit.calendars()
         let preferences = try await repository.bind(calendars)
-        let definitions = try await repository.userEvents()
-        let annotations = try await repository.annotations()
-        let source = try await eventKitEvents(in: interval, preferences: preferences)
+        async let definitionsTask = repository.userEvents()
+        async let annotationsTask = repository.annotations()
+        async let sourceTask = eventKitEvents(in: interval, preferences: preferences)
+        let definitions = try await definitionsTask
+        let annotations = try await annotationsTask
+        let source = try await sourceTask
         let user = definitions.flatMap { generator.occurrences(of: $0, in: interval) }
         return HLLWidgetPayload(revision: revision, generatedAt: now, expiresAt: interval.end,
-                                events: source + user, userDefinitions: definitions,
-                                calendars: preferences, annotations: annotations)
+                                events: source + user,
+                                userDefinitions: definitions,
+                                calendars: preferences,
+                                annotations: annotations)
     }
 
     public func save(_ event: HLLUserEvent) async throws {
