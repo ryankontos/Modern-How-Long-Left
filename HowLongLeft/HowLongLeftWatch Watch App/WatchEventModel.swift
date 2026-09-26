@@ -37,10 +37,10 @@ final class WatchEventModel {
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
-        if EKEventStore.authorizationStatus(for: .event) != .fullAccess {
-            needsCalendarAccess = true
-            isLoading = false
-        }
+        // Never seed the watch UI with stale calendar details after permission
+        // was revoked. User-created events can still appear from the local cache.
+        let includeCalendarEvents = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+        needsCalendarAccess = !includeCalendarEvents
 
         // Decode the tiny App Group launch snapshot away from the main actor.
         let quickSnapshot = Task.detached(priority: .userInitiated) {
@@ -50,7 +50,8 @@ final class WatchEventModel {
             return payload?.launchSnapshot(query: HLLEventQuery(
                 interval: DateInterval(start: now.addingTimeInterval(-86_400),
                                        end: now.addingTimeInterval(14 * 86_400)),
-                rule: .upcoming(now), context: "watch.main"))
+                rule: .upcoming(now), context: "watch.main"),
+                includeCalendarEvents: includeCalendarEvents)
         }
         Task { [weak self] in
             guard let snapshot = await quickSnapshot.value,

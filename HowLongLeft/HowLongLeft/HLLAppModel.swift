@@ -45,13 +45,10 @@ final class HLLAppModel {
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
-        // Permission status is cheap to read and does not require opening the
-        // CloudKit mirror. Show the empty shell immediately on a fresh install
-        // while the user decides whether to grant calendar access.
-        if EKEventStore.authorizationStatus(for: .event) != .fullAccess {
-            needsCalendarAccess = true
-            isLoading = false
-        }
+        // Permission status is cheap to read and lets the local seed discard
+        // calendar details if access was revoked while the app was closed.
+        let includeCalendarEvents = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+        needsCalendarAccess = !includeCalendarEvents
         // The last App Group projection is a local, atomic file. Read it
         // directly for the first frame instead of waiting for CloudKit or
         // opening EventKit. The runtime performs the authoritative refresh
@@ -63,7 +60,8 @@ final class HLLAppModel {
             return payload?.launchSnapshot(query: HLLEventQuery(
                 interval: DateInterval(start: now.addingTimeInterval(-86_400),
                                        end: now.addingTimeInterval(30 * 86_400)),
-                rule: .upcoming(now), context: "home.main"))
+                rule: .upcoming(now), context: "home.main"),
+                includeCalendarEvents: includeCalendarEvents)
         }
         Task { [weak self] in
             guard let snapshot = await quickSnapshot.value else { return }

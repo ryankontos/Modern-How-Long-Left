@@ -281,6 +281,39 @@ import Testing
     #expect(points.allSatisfy { $0.events.isEmpty })
 }
 
+@Test func launchSnapshotDropsRevokedCalendarDataButKeepsPersonalData() {
+    let now = Date(timeIntervalSince1970: 2_000_000)
+    let calendarEvent = HLLEvent(id: UUID(), source: .eventKit, title: "Private meeting",
+        start: now.addingTimeInterval(300), end: now.addingTimeInterval(900),
+        calendarID: "local-calendar")
+    let personalEvent = HLLEvent(id: UUID(), source: .user, title: "Personal reminder",
+        start: now.addingTimeInterval(1_200), end: now.addingTimeInterval(1_500),
+        portableKey: "user|personal-event")
+    let hiddenPersonalSeries = HLLUserEvent(
+        title: "Hidden personal", start: now.addingTimeInterval(1_800), duration: 300)
+    let personalAnnotation = HLLEventAnnotation(
+        kind: .hidden, scope: .series, seriesID: hiddenPersonalSeries.id.uuidString,
+        eventTitle: hiddenPersonalSeries.title)
+    let calendarAnnotation = HLLEventAnnotation(
+        kind: .hidden, scope: .occurrence, eventID: calendarEvent.id,
+        portableKey: "calendar-profile|private-event", eventTitle: calendarEvent.title)
+    let calendar = HLLCalendarPreference(title: "Private calendar")
+    let payload = HLLWidgetPayload(revision: 1, generatedAt: now,
+        expiresAt: now.addingTimeInterval(86_400), events: [calendarEvent, personalEvent],
+        userDefinitions: [hiddenPersonalSeries],
+        calendars: ["local-calendar": calendar],
+        annotations: [calendarAnnotation, personalAnnotation])
+    let query = HLLEventQuery(
+        interval: DateInterval(start: now, end: now.addingTimeInterval(3_600)),
+        rule: .upcoming(now), context: "home.main")
+
+    let snapshot = payload.launchSnapshot(query: query, includeCalendarEvents: false)
+
+    #expect(snapshot.events == [personalEvent])
+    #expect(snapshot.calendars.isEmpty)
+    #expect(snapshot.hiddenAnnotations == [personalAnnotation])
+}
+
 @Test func widgetTimelineReevaluatesSmartCountdownAtTransitions() {
     let now = Date()
     let running = HLLEvent(id: UUID(), source: .user, title: "Running",
