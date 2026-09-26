@@ -129,6 +129,24 @@ import Testing
     #expect(firstProfile.id == secondProfile.id)
 }
 
+@Test func obsoleteCalendarBindingsArePruned() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try await HLLDatabase.open(directory: directory, cloudContainerIdentifier: nil)
+    let repository = HLLRepository(database: database)
+    let calendars = [
+        HLLEventKitSource.CalendarInfo(localID: "old", title: "Home", sourceTitle: "iCloud",
+                                       sourceIdentifier: "source-1"),
+        HLLEventKitSource.CalendarInfo(localID: "current", title: "Work", sourceTitle: "iCloud",
+                                       sourceIdentifier: "source-2")
+    ]
+    _ = try await repository.bind(calendars)
+    try await repository.pruneObsoleteCalendarBindings(keeping: ["current"])
+    let bindings = try await database.all(HLLCalendarBinding.self, kind: .calendarBinding,
+                                          location: .local)
+    #expect(bindings.map(\.localCalendarID) == ["current"])
+}
+
 @Test func appSettingsAndWidgetDefaultsStayTypeSafe() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }

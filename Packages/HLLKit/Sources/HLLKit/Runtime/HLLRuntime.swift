@@ -86,6 +86,13 @@ public actor HLLRuntime {
             do {
                 try await database.pruneOldEventIdentities(before: Date().addingTimeInterval(-90 * 86_400))
                 try await repository.pruneExpiredAnnotations(before: .now)
+                // An empty list can mean permission has not been granted, so
+                // only prune bindings after an authorized EventKit read.
+                if await eventKit.authorizationStatus() == .fullAccess {
+                    let calendars = await eventKit.calendars()
+                    try await repository.pruneObsoleteCalendarBindings(
+                        keeping: Set(calendars.map(\.localID)))
+                }
                 try await database.compactDuplicateRows()
                 try await database.pruneExportedHistory()
                 try Data(String(Date().timeIntervalSince1970).utf8).write(to: marker, options: .atomic)

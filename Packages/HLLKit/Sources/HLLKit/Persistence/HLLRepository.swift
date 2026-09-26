@@ -228,4 +228,17 @@ public actor HLLRepository {
         }
         return result
     }
+
+    /// EventKit can replace a calendar's local identifier after an account
+    /// refresh. Keep current bindings, but remove aliases that can no longer
+    /// be reached on this device so the local store stays bounded.
+    public func pruneObsoleteCalendarBindings(keeping localIDs: Set<String>) async throws {
+        guard !localIDs.isEmpty else { return }
+        let bindings: [HLLCalendarBinding] = try await database.all(
+            HLLCalendarBinding.self, kind: .calendarBinding, location: .local)
+        for binding in bindings where !localIDs.contains(binding.localCalendarID) {
+            try await database.remove(kind: .calendarBinding,
+                                      key: binding.localCalendarID, location: .local)
+        }
+    }
 }
