@@ -50,6 +50,9 @@ public actor HLLPurchaseCoordinator {
     public func start() {
         guard updatesTask == nil else { return }
 #if canImport(WatchConnectivity)
+        watchBridge?.setReceiveHandler { [weak self] cached in
+            Task { await self?.adoptCachedSnapshot(cached) }
+        }
         watchBridge?.start()
 #endif
         updatesTask = Task { [weak self] in
@@ -158,6 +161,12 @@ public actor HLLPurchaseCoordinator {
 
     private func loadCachedSnapshot() async {
         guard let cached = await snapshotStore.readBest(), cached.checkedAt > snapshot.checkedAt else { return }
+        snapshot = cached
+        for continuation in streams.values { continuation.yield(cached) }
+    }
+
+    private func adoptCachedSnapshot(_ cached: HLLPurchaseSnapshot) {
+        guard cached.checkedAt > snapshot.checkedAt else { return }
         snapshot = cached
         for continuation in streams.values { continuation.yield(cached) }
     }

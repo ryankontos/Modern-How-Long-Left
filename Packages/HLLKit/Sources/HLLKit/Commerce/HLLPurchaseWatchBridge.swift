@@ -12,6 +12,7 @@ public final class HLLPurchaseWatchBridge: NSObject, WCSessionDelegate, @uncheck
     private let store: HLLPurchaseSnapshotStore
     private let lock = NSLock()
     private var pendingData: Data?
+    private var receiveHandler: (@Sendable (HLLPurchaseSnapshot) -> Void)?
 
     public init(session: WCSession = .default, store: HLLPurchaseSnapshotStore) {
         self.session = session
@@ -31,6 +32,15 @@ public final class HLLPurchaseWatchBridge: NSObject, WCSessionDelegate, @uncheck
         pendingData = data
         lock.unlock()
         flushIfPossible()
+    }
+
+    /// The coordinator installs this once. Delivery is immediately handed to
+    /// an actor task, so a WatchConnectivity delegate callback never touches UI
+    /// state or StoreKit synchronously.
+    public func setReceiveHandler(_ handler: (@Sendable (HLLPurchaseSnapshot) -> Void)?) {
+        lock.lock()
+        receiveHandler = handler
+        lock.unlock()
     }
 
     private func flushIfPossible() {
@@ -62,7 +72,12 @@ public final class HLLPurchaseWatchBridge: NSObject, WCSessionDelegate, @uncheck
               let snapshot = try? JSONDecoder().decode(HLLPurchaseSnapshot.self, from: data) else {
             return
         }
-        try? store.writeLocal(snapshot.replacing(source: .watchConnectivityCache))
+        let cached = snapshot.replacing(source: .watchConnectivityCache)
+        try? store.writeLocal(cached)
+        lock.lock()
+        let handler = receiveHandler
+        lock.unlock()
+        handler?(cached)
     }
 
 #if os(iOS)

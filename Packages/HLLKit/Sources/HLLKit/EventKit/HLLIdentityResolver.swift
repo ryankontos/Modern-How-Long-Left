@@ -12,6 +12,8 @@ public actor HLLIdentityResolver {
     private let database: HLLDatabase
     private var records: [String: HLLIdentityRecord] = [:]
     private var byFingerprint: [String: Set<UUID>] = [:]
+    private var pendingRecords: [String: HLLIdentityRecord] = [:]
+    private var flushTask: Task<Void, Never>?
     private var loaded = false
 
     public init(database: HLLDatabase) { self.database = database }
@@ -23,7 +25,13 @@ public actor HLLIdentityResolver {
         let scopedCalendar = event.calendarLocalID
         var aliases: [String] = []
         if let external = event.externalID, !external.isEmpty {
-            aliases.append("external|\(scopedCalendar)|\(external)|\(occurrence)")
+            // Prefer the durable calendar profile when available. EventKit can
+            // replace a local calendar identifier after an account refresh,
+            // while the profile and external item identifier remain stable.
+            if let calendarProfileID {
+                aliases.append("external|profile|\(calendarProfileID.uuidString)|\(external)|\(occurrence)")
+            }
+            aliases.append("external|calendar|\(scopedCalendar)|\(external)|\(occurrence)")
         }
         if let local = event.localID, !local.isEmpty {
             aliases.append("local|\(scopedCalendar)|\(local)|\(occurrence)")
@@ -40,15 +48,15 @@ public actor HLLIdentityResolver {
             if let old = records[alias], Date().timeIntervalSince(old.updatedAt) > 7 * 86_400 {
                 let touched = HLLIdentityRecord(alias: alias, eventID: old.eventID,
                                                 fingerprint: fingerprint, updatedAt: .now)
-                try await database.put(touched, kind: .eventIdentity, key: alias, location: .local)
                 records[alias] = touched
+                enqueue(touched)
             }
         }
         for alias in aliases where records[alias]?.eventID != id {
             let record = HLLIdentityRecord(alias: alias, eventID: id,
                                            fingerprint: fingerprint, updatedAt: .now)
-            try await database.put(record, kind: .eventIdentity, key: alias, location: .local)
             records[alias] = record
+            enqueue(record)
         }
         byFingerprint[fingerprint, default: []].insert(id)
         let portableKey: String?
@@ -66,5 +74,36 @@ public actor HLLIdentityResolver {
         })
         for record in records.values { byFingerprint[record.fingerprint, default: []].insert(record.eventID) }
         loaded = true
+    }
+
+    /// Identity writes are not on the launch-critical query path. A small
+    /// coalescing queue keeps the resolver fast when a calendar has many
+    /// occurrences while still persisting aliases shortly after the snapshot.
+    private func enqueue(_ record: HLLIdentityRecord) {
+        pendingRecords[record.alias] = record
+        guard flushTask == nil else { return }
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            await self?.flushPending()
+        }
+    }
+
+    private func flushPending() async {
+        let records = pendingRecords.values
+        pendingRecords.removeAll(keepingCapacity: true)
+        flushTask = nil
+        for record in records {
+            try? await database.put(record, kind: .eventIdentity,
+                                    key: record.alias, location: .local)
+        }
+        if !pendingRecords.isEmpty { enqueueNextFlush() }
+    }
+
+    private func enqueueNextFlush() {
+        guard flushTask == nil else { return }
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            await self?.flushPending()
+        }
     }
 }

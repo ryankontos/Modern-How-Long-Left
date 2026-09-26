@@ -219,7 +219,7 @@ private struct WatchSettingsView: View {
                 }
                 Section {
                     NavigationLink {
-                        WatchWidgetSettingsView()
+                        WatchWidgetSettingsView(model: model)
                     } label: {
                         Label("Widgets & Complications", systemImage: "watchface")
                     }
@@ -243,12 +243,19 @@ private struct WatchSettingsView: View {
 }
 
 private struct WatchWidgetSettingsView: View {
+    let model: WatchEventModel
+
     var body: some View {
         List {
             Section {
                 Text("Configure each complication from the watch face editor. The shared configuration supports current, in-progress, or all upcoming events, all-day filtering, a pinned event, and several countdown styles.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if !model.isFeatureUnlocked(.complications) {
+                    Label("Complications are available with Premium.", systemImage: "lock.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
             }
             Section("Styles") {
                 Label("Countdown to start or end", systemImage: "timer")
