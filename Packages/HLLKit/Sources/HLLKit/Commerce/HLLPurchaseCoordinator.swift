@@ -176,6 +176,24 @@ public actor HLLPurchaseCoordinator {
 
     private func adoptCachedSnapshot(_ cached: HLLPurchaseSnapshot) {
         guard cached.checkedAt > snapshot.checkedAt else { return }
+        // StoreKit is authoritative whenever this process has already seen
+        // transaction evidence. A newer cache may fill an offline gap, but it
+        // must not briefly downgrade a known active purchase or resurrect a
+        // product that StoreKit has just reported as revoked/expired.
+        if snapshot.source == .storeKit {
+            if snapshot.hasTransactionEvidence {
+                let currentActive = HLLPaidFeature.allCases.filter {
+                    snapshot.isUnlocked($0, at: .now)
+                }
+                guard snapshot.hasActiveEntitlement(at: .now),
+                      currentActive.allSatisfy({ cached.isUnlocked($0, at: .now) }) else {
+                    return
+                }
+            } else if snapshot.hasActiveEntitlement(at: .now)
+                && !cached.hasActiveEntitlement(at: .now) {
+                return
+            }
+        }
         snapshot = cached
         for continuation in streams.values { continuation.yield(cached) }
     }
