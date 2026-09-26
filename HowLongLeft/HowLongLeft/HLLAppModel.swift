@@ -69,11 +69,7 @@ final class HLLAppModel {
                     groupIdentifier: HLLConfiguration.appGroupIdentifier,
                     cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier)
                 guard let self else { return }
-                self.runtime = runtime
-                needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
-                revisionTask = Task { [weak self] in
-                    for await _ in await runtime.engine.changes() { await self?.refresh() }
-                }
+                await self.attach(runtime)
             } catch {
                 self?.errorMessage = error.localizedDescription
                 self?.isLoading = false
@@ -82,13 +78,25 @@ final class HLLAppModel {
     }
 
     func requestCalendarAccess() {
-        guard let runtime else { return }
         Task {
             do {
+                let runtime = try await HLLRuntime.shared(
+                    groupIdentifier: HLLConfiguration.appGroupIdentifier,
+                    cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier)
+                await attach(runtime)
                 needsCalendarAccess = !(try await runtime.eventKit.requestAccess())
                 await runtime.engine.invalidate()
                 await refresh()
             } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func attach(_ runtime: HLLRuntime) async {
+        self.runtime = runtime
+        needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
+        guard revisionTask == nil else { return }
+        revisionTask = Task { [weak self] in
+            for await _ in await runtime.engine.changes() { await self?.refresh() }
         }
     }
 
