@@ -4,10 +4,34 @@ import HLLKit
 import Observation
 import SwiftUI
 import UserNotifications
+import WatchKit
 import WidgetKit
+
+final class HLLWatchApplicationDelegate: NSObject, WKApplicationDelegate {
+    func application(_ application: WKApplication,
+                     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (WKBackgroundFetchResult) -> Void) {
+        Task {
+            do {
+                let runtime = try await HLLRuntime.shared(
+                    groupIdentifier: HLLConfiguration.appGroupIdentifier,
+                    cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier)
+                await runtime.engine.invalidate()
+                if try await runtime.publishWidgetSnapshot() {
+                    WidgetCenter.shared.reloadAllTimelines()
+                }
+                completionHandler(.newData)
+            } catch {
+                completionHandler(.failed)
+            }
+        }
+    }
+}
 
 @main
 struct HowLongLeftWatchApp: App {
+    @WKApplicationDelegateAdaptor(HLLWatchApplicationDelegate.self)
+    private var applicationDelegate
     @State private var model = WatchEventModel()
     @Environment(\.scenePhase) private var scenePhase
 
