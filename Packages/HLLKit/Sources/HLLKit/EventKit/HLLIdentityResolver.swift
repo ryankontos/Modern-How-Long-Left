@@ -23,18 +23,22 @@ public actor HLLIdentityResolver {
         if !loaded { try await load() }
         let occurrence = String(event.occurrenceStart.timeIntervalSince1970)
         let scopedCalendar = event.calendarLocalID
+        // One-off events should keep their identity when a user edits the
+        // date. Repeating occurrences still need the occurrence component so
+        // each occurrence remains independently addressable.
+        let occurrenceComponent = event.hasRecurrence ? "|\(occurrence)" : ""
         var aliases: [String] = []
         if let external = event.externalID, !external.isEmpty {
             // Prefer the durable calendar profile when available. EventKit can
             // replace a local calendar identifier after an account refresh,
             // while the profile and external item identifier remain stable.
             if let calendarProfileID {
-                aliases.append("external|profile|\(calendarProfileID.uuidString)|\(external)|\(occurrence)")
+                aliases.append("external|profile|\(calendarProfileID.uuidString)|\(external)\(occurrenceComponent)")
             }
-            aliases.append("external|calendar|\(scopedCalendar)|\(external)|\(occurrence)")
+            aliases.append("external|calendar|\(scopedCalendar)|\(external)\(occurrenceComponent)")
         }
         if let local = event.localID, !local.isEmpty {
-            aliases.append("local|\(scopedCalendar)|\(local)|\(occurrence)")
+            aliases.append("local|\(scopedCalendar)|\(local)\(occurrenceComponent)")
         }
         // A fingerprint is used only when it identifies a single previously seen event.
         let fingerprint = [scopedCalendar, occurrence, event.title.folding(options: [.caseInsensitive], locale: nil),
@@ -61,7 +65,7 @@ public actor HLLIdentityResolver {
         byFingerprint[fingerprint, default: []].insert(id)
         let portableKey: String?
         if let external = event.externalID, let profile = calendarProfileID {
-            portableKey = "\(profile.uuidString)|\(external)|\(occurrence)"
+            portableKey = "\(profile.uuidString)|\(external)\(occurrenceComponent)"
         } else { portableKey = nil }
         return (id, portableKey)
     }

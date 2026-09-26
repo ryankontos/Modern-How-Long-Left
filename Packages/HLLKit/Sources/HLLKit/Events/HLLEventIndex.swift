@@ -34,26 +34,34 @@ public struct HLLEventIndex: Sendable {
 
     private func candidateIndices(for rule: HLLEventRule) -> [Int]? {
         switch rule {
-        case .calendar(let id): byCalendar[id] ?? []
-        case .source(let source): bySource[source] ?? []
-        case .allDay(let value): byAllDay[value] ?? []
-        case .start(let range): rangeOf(byStart, key: { events[$0].start }, in: range)
-        case .end(let range): rangeOf(byEnd, key: { events[$0].end }, in: range)
-        case .running(let date): smaller(
+        case .calendar(let id): return byCalendar[id] ?? []
+        case .source(let source): return bySource[source] ?? []
+        case .allDay(let value): return byAllDay[value] ?? []
+        case .start(let range): return rangeOf(byStart, key: { events[$0].start }, in: range)
+        case .end(let range): return rangeOf(byEnd, key: { events[$0].end }, in: range)
+        case .running(let date): return intersect(
             Array(byStart.prefix(lowerBound(byStart) { events[$0].start <= date })),
             Array(byEnd.suffix(from: lowerBound(byEnd) { events[$0].end <= date })))
-        case .upcoming(let date):
-            Array(byEnd.suffix(from: lowerBound(byEnd) { events[$0].end <= date }))
-        case .intersects(let range): smaller(
+        case .upcoming(let date): return Array(
+            byEnd.suffix(from: lowerBound(byEnd) { events[$0].end <= date }))
+        case .intersects(let range): return intersect(
             Array(byStart.prefix(lowerBound(byStart) { events[$0].start < range.end })),
             Array(byEnd.suffix(from: lowerBound(byEnd) { events[$0].end <= range.start })))
         case .and(let rules):
-            rules.compactMap(candidateIndices).min(by: { $0.count < $1.count })
-        case .or, .not, .custom: nil
+            let indexed = rules.compactMap(candidateIndices)
+            guard !indexed.isEmpty else { return nil }
+            return indexed.dropFirst().reduce(indexed[0], intersect)
+        case .or, .not, .custom: return nil
         }
     }
 
-    private func smaller(_ lhs: [Int], _ rhs: [Int]) -> [Int] { lhs.count <= rhs.count ? lhs : rhs }
+    /// Intersects sorted index lists while preserving the first list's order.
+    /// This keeps compound queries cheap without allocating a second event array.
+    private func intersect(_ lhs: [Int], _ rhs: [Int]) -> [Int] {
+        guard !lhs.isEmpty, !rhs.isEmpty else { return [] }
+        let rhsSet = Set(rhs)
+        return lhs.filter { rhsSet.contains($0) }
+    }
 
     private func rangeOf(_ indices: [Int], key: (Int) -> Date,
                          in range: DateInterval) -> [Int] {

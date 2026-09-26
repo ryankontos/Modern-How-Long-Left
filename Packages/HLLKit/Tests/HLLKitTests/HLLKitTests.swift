@@ -34,6 +34,43 @@ import Testing
                                      calendarPreferences: ["home": hidden], annotations: []).isEmpty)
 }
 
+@Test func compoundIndexIntersectsRunningCandidates() {
+    let base = Date(timeIntervalSince1970: 1_000_000)
+    let running = HLLEvent(id: UUID(), source: .user, title: "Running", start: base,
+                           end: base.addingTimeInterval(3_600), calendarID: "home")
+    let futureHome = HLLEvent(id: UUID(), source: .user, title: "Future",
+                              start: base.addingTimeInterval(7_200),
+                              end: base.addingTimeInterval(10_800), calendarID: "home")
+    let otherRunning = HLLEvent(id: UUID(), source: .user, title: "Other", start: base,
+                                end: base.addingTimeInterval(3_600), calendarID: "work")
+    let rule: HLLEventRule = .and([.calendar("home"), .running(base.addingTimeInterval(60))])
+    #expect(HLLEventIndex([running, futureHome, otherRunning]).candidates(for: rule) == [running])
+}
+
+@Test func oneOffEventIdentitySurvivesRescheduling() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try await HLLDatabase.open(directory: directory, cloudContainerIdentifier: nil)
+    let resolver = HLLIdentityResolver(database: database)
+    let profile = UUID()
+    let first = HLLEventKitSource.RawEvent(
+        localID: "local-1", externalID: "external-1", calendarLocalID: "calendar-1",
+        calendarTitle: "Home", calendarSourceTitle: "iCloud", calendarSourceIdentifier: "source-1",
+        title: "Dinner", start: Date(timeIntervalSince1970: 1_000_000),
+        end: Date(timeIntervalSince1970: 1_003_600), occurrenceStart: Date(timeIntervalSince1970: 1_000_000),
+        isAllDay: false, hasRecurrence: false, location: nil, notes: nil)
+    let moved = HLLEventKitSource.RawEvent(
+        localID: "local-2", externalID: "external-1", calendarLocalID: "calendar-1",
+        calendarTitle: "Home", calendarSourceTitle: "iCloud", calendarSourceIdentifier: "source-1",
+        title: "Dinner", start: Date(timeIntervalSince1970: 1_100_000),
+        end: Date(timeIntervalSince1970: 1_103_600), occurrenceStart: Date(timeIntervalSince1970: 1_100_000),
+        isAllDay: false, hasRecurrence: false, location: nil, notes: nil)
+    let firstIdentity = try await resolver.resolve(first, calendarProfileID: profile)
+    let movedIdentity = try await resolver.resolve(moved, calendarProfileID: profile)
+    #expect(firstIdentity.id == movedIdentity.id)
+    #expect(firstIdentity.portableKey == movedIdentity.portableKey)
+}
+
 @Test func queryIntervalAlwaysBoundsComposedRules() {
     let base = Date(timeIntervalSince1970: 1_000_000)
     let inside = HLLEvent(id: UUID(), source: .user, title: "Inside", start: base,

@@ -43,7 +43,10 @@ public struct HLLExtensionSnapshotLoader: Sendable {
             let profile = calendars[event.calendarLocalID]
             let occurrence = String(event.occurrenceStart.timeIntervalSince1970)
             let portable = event.externalID.flatMap { external in
-                profile.map { "\($0.id.uuidString)|\(external)|\(occurrence)" }
+                profile.map {
+                    let suffix = event.hasRecurrence ? "|\(occurrence)" : ""
+                    return "\($0.id.uuidString)|\(external)\(suffix)"
+                }
             }
             let key = fingerprint(event)
             let uniqueMatch = existingByFingerprint[key].flatMap { $0.count == 1 ? $0.first : nil }
@@ -102,28 +105,77 @@ public struct HLLExtensionSnapshotLoader: Sendable {
                        into platform: HLLWidgetPayload?,
                        now: Date) -> HLLWidgetPayload? {
         guard let shared else { return platform }
-        if let platform, platform.generatedAt > shared.generatedAt {
-            return platform
-        }
         var calendars = platform?.calendars ?? [:]
         // Shared profiles are keyed by UUID until local EventKit IDs are
         // available. The direct EventKit pass below binds them by title/source.
-        for profile in shared.calendars {
+        let platformCalendars = platform?.calendars ?? [:]
+        let platformProfiles = Dictionary(platformCalendars.values.map { ($0.id, $0) },
+                                          uniquingKeysWith: { newerCalendar($0, $1)! })
+        for sharedProfile in shared.calendars {
+            guard let profile = newerCalendar(platformProfiles[sharedProfile.id], sharedProfile) else {
+                continue
+            }
             calendars[profile.id.uuidString] = profile
+            // Preserve an already-bound local ID when the extension has no
+            // calendar permission yet. This keeps visibility rules effective
+            // while the next authorized refresh rebinds by name/source.
+            for (localID, existing) in platformCalendars where existing.id == profile.id {
+                calendars[localID] = profile
+            }
         }
-        // Preserve already-bound local IDs when the extension has no calendar
-        // permission yet. This keeps hidden/visibility rules effective while
-        // still allowing the next authorized refresh to rebind by name.
-        for (localID, existing) in platform?.calendars ?? [:]
-            where shared.calendars.contains(where: { $0.id == existing.id }) {
-            calendars[localID] = shared.calendars.first { $0.id == existing.id } ?? existing
+
+        var definitions = Dictionary((platform?.userDefinitions ?? []).map { ($0.id, $0) },
+                                     uniquingKeysWith: { newerUserEvent($0, $1)! })
+        for definition in shared.userDefinitions {
+            definitions[definition.id] = newerUserEvent(definitions[definition.id], definition)
         }
-        return HLLWidgetPayload(revision: shared.revision, generatedAt: shared.generatedAt,
+
+        // A device-local annotation may be intentionally unsynced. Merge by
+        // logical ID and updatedAt instead of replacing the entire list with
+        // the most recently uploaded cross-device projection.
+        var annotations = Dictionary((platform?.annotations ?? []).map { ($0.id, $0) },
+                                     uniquingKeysWith: { newerAnnotation($0, $1)! })
+        for annotation in shared.annotations {
+            annotations[annotation.id] = newerAnnotation(annotations[annotation.id], annotation)
+        }
+
+        return HLLWidgetPayload(revision: max(platform?.revision ?? 0, shared.revision),
+                                generatedAt: max(platform?.generatedAt ?? .distantPast,
+                                                 shared.generatedAt),
                                 expiresAt: platform?.expiresAt ?? now.addingTimeInterval(14 * 86_400),
                                 events: platform?.events ?? [],
-                                userDefinitions: shared.userDefinitions,
+                                userDefinitions: definitions.values.sorted { $0.start < $1.start },
                                 calendars: calendars,
-                                annotations: shared.annotations)
+                                annotations: annotations.values.sorted { $0.updatedAt < $1.updatedAt })
+    }
+
+    private func newerCalendar(_ lhs: HLLCalendarPreference?,
+                               _ rhs: HLLCalendarPreference?) -> HLLCalendarPreference? {
+        switch (lhs, rhs) {
+        case let (left?, right?): return left.updatedAt >= right.updatedAt ? left : right
+        case let (left?, nil): return left
+        case let (nil, right?): return right
+        case (nil, nil): return nil
+        }
+    }
+
+    private func newerUserEvent(_ lhs: HLLUserEvent?, _ rhs: HLLUserEvent?) -> HLLUserEvent? {
+        switch (lhs, rhs) {
+        case let (left?, right?): return left.updatedAt >= right.updatedAt ? left : right
+        case let (left?, nil): return left
+        case let (nil, right?): return right
+        case (nil, nil): return nil
+        }
+    }
+
+    private func newerAnnotation(_ lhs: HLLEventAnnotation?,
+                                 _ rhs: HLLEventAnnotation?) -> HLLEventAnnotation? {
+        switch (lhs, rhs) {
+        case let (left?, right?): return left.updatedAt >= right.updatedAt ? left : right
+        case let (left?, nil): return left
+        case let (nil, right?): return right
+        case (nil, nil): return nil
+        }
     }
 
     private func matchingProfile(for event: HLLEventKitSource.RawEvent,
