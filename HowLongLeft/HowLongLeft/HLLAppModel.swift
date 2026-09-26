@@ -15,12 +15,16 @@ final class HLLAppModel {
     var activityPolicies: [HLLLiveActivityPolicy] = []
     var widgetDefaults = HLLWidgetDefaults()
     var activeActivityEventKeys: Set<String> = []
+    var purchaseSnapshot = HLLPurchaseSnapshot.locked(configuration: .shipping)
+    var purchaseProducts: [HLLStoreProduct] = []
+    var purchaseErrorMessage: String?
     var needsCalendarAccess = false
     var isLoading = true
     var errorMessage: String?
 
     private var runtime: HLLRuntime?
     private var revisionTask: Task<Void, Never>?
+    private var purchaseTask: Task<Void, Never>?
     private var boundaryTask: Task<Void, Never>?
     private var hasStarted = false
 
@@ -94,9 +98,60 @@ final class HLLAppModel {
     private func attach(_ runtime: HLLRuntime) async {
         self.runtime = runtime
         needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
-        guard revisionTask == nil else { return }
-        revisionTask = Task { [weak self] in
-            for await _ in await runtime.engine.changes() { await self?.refresh() }
+        await runtime.purchases.start()
+        if revisionTask == nil {
+            revisionTask = Task { [weak self] in
+                for await _ in await runtime.engine.changes() { await self?.refresh() }
+            }
+        }
+        if purchaseTask == nil {
+            purchaseTask = Task { [weak self] in
+                for await snapshot in await runtime.purchases.changes() {
+                    guard let self else { return }
+                    self.purchaseSnapshot = snapshot
+                    WidgetCenter.shared.reloadAllTimelines()
+                    await self.reconcileLiveActivities(using: runtime)
+                }
+            }
+        }
+    }
+
+    func isFeatureUnlocked(_ feature: HLLPaidFeature) -> Bool {
+        purchaseSnapshot.isUnlocked(feature)
+    }
+
+    func loadPurchaseProducts() {
+        guard let runtime else { return }
+        Task {
+            do {
+                purchaseProducts = try await runtime.purchases.products()
+            } catch {
+                purchaseErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func purchase(productID: String) {
+        guard let runtime else { return }
+        Task {
+            do {
+                purchaseSnapshot = try await runtime.purchases.purchase(productID: productID)
+            } catch HLLPurchaseError.userCancelled {
+                // Cancellation is a normal end to the sheet, not an app error.
+            } catch {
+                purchaseErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func restorePurchases() {
+        guard let runtime else { return }
+        Task {
+            do {
+                purchaseSnapshot = try await runtime.purchases.restorePurchases()
+            } catch {
+                purchaseErrorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -235,6 +290,10 @@ final class HLLAppModel {
 
     func startActivity(for event: HLLEvent) {
         guard let runtime else { return }
+        guard isFeatureUnlocked(.liveActivities) else {
+            purchaseErrorMessage = "Live Activities are available with How Long Left Premium."
+            return
+        }
         Task {
             do {
                 try await runtime.liveActivities.start(event)
@@ -261,6 +320,10 @@ final class HLLAppModel {
 
     func setAutomaticTracking(_ target: HLLLiveActivityPolicy.Target, enabled: Bool) {
         guard let runtime else { return }
+        guard !enabled || isFeatureUnlocked(.liveActivities) else {
+            purchaseErrorMessage = "Live Activities are available with How Long Left Premium."
+            return
+        }
         Task {
             do {
                 if enabled {

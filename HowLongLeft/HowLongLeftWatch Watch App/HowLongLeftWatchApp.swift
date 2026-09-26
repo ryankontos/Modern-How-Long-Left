@@ -33,11 +33,15 @@ final class WatchEventModel {
     var events: [HLLEvent] = []
     var calendars: [(id: String, preference: HLLCalendarPreference)] = []
     var hiddenAnnotations: [HLLEventAnnotation] = []
+    var purchaseSnapshot = HLLPurchaseSnapshot.locked(configuration: .shipping)
+    var purchaseProducts: [HLLStoreProduct] = []
+    var purchaseErrorMessage: String?
     var needsCalendarAccess = false
     var isLoading = true
     var errorMessage: String?
     private var runtime: HLLRuntime?
     private var revisionTask: Task<Void, Never>?
+    private var purchaseTask: Task<Void, Never>?
     private var hasStarted = false
 
     func currentEvents(at date: Date = .now) -> [HLLEvent] {
@@ -92,9 +96,49 @@ final class WatchEventModel {
     private func attach(_ runtime: HLLRuntime) async {
         self.runtime = runtime
         needsCalendarAccess = await runtime.eventKit.authorizationStatus() != .fullAccess
-        guard revisionTask == nil else { return }
-        revisionTask = Task { [weak self] in
-            for await _ in await runtime.engine.changes() { await self?.refresh() }
+        await runtime.purchases.start()
+        if revisionTask == nil {
+            revisionTask = Task { [weak self] in
+                for await _ in await runtime.engine.changes() { await self?.refresh() }
+            }
+        }
+        if purchaseTask == nil {
+            purchaseTask = Task { [weak self] in
+                for await snapshot in await runtime.purchases.changes() {
+                    guard let self else { return }
+                    self.purchaseSnapshot = snapshot
+                    WidgetCenter.shared.reloadAllTimelines()
+                }
+            }
+        }
+    }
+
+    func isFeatureUnlocked(_ feature: HLLPaidFeature) -> Bool {
+        purchaseSnapshot.isUnlocked(feature)
+    }
+
+    func loadPurchaseProducts() {
+        guard let runtime else { return }
+        Task {
+            do { purchaseProducts = try await runtime.purchases.products() }
+            catch { purchaseErrorMessage = error.localizedDescription }
+        }
+    }
+
+    func purchase(productID: String) {
+        guard let runtime else { return }
+        Task {
+            do { purchaseSnapshot = try await runtime.purchases.purchase(productID: productID) }
+            catch HLLPurchaseError.userCancelled { }
+            catch { purchaseErrorMessage = error.localizedDescription }
+        }
+    }
+
+    func restorePurchases() {
+        guard let runtime else { return }
+        Task {
+            do { purchaseSnapshot = try await runtime.purchases.restorePurchases() }
+            catch { purchaseErrorMessage = error.localizedDescription }
         }
     }
 

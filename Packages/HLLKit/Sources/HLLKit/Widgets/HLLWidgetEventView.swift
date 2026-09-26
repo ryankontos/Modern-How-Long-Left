@@ -6,17 +6,23 @@ public struct HLLWidgetEventView: View {
     public let events: [HLLEvent]
     public let date: Date
     public let style: HLLWidgetStyle
+    public let isLocked: Bool
     @Environment(\.widgetFamily) private var family
 
-    public init(events: [HLLEvent], date: Date, style: HLLWidgetStyle = .automatic) {
+    public init(events: [HLLEvent], date: Date, style: HLLWidgetStyle = .automatic,
+                isLocked: Bool = false) {
         self.events = events
         self.date = date
         self.style = style
+        self.isLocked = isLocked
     }
 
     public var body: some View {
         Group {
-            switch family {
+            if isLocked {
+                lockedContent
+            } else {
+                switch family {
             case .accessoryInline:
                 Text(inlineText)
             case .accessoryCircular:
@@ -40,9 +46,21 @@ public struct HLLWidgetEventView: View {
                     Spacer(minLength: 0)
                 }
                 .padding()
+                }
             }
         }
         .containerBackground(.fill.tertiary, for: .widget)
+    }
+
+    private var lockedContent: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "lock.fill")
+                .font(.title3)
+            Text("Unlock How Long Left")
+                .font(.caption)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var inlineText: String {

@@ -115,3 +115,23 @@ import Testing
         context: "new.widget.mode", limit: 3, rule: { .upcoming($0) })
     #expect(points.allSatisfy { $0.events.isEmpty })
 }
+
+@Test func purchaseSnapshotsRespectExpiryAndRevocation() {
+    let soon = Date(timeIntervalSince1970: 10_000)
+    let active = HLLFeatureEntitlement(feature: .widgets, isUnlocked: true,
+                                        productIDs: ["HLLWidget"],
+                                        expirationDate: soon.addingTimeInterval(60))
+    let snapshot = HLLPurchaseSnapshot(checkedAt: soon, features: [
+        .widgets: active,
+        .complications: HLLFeatureEntitlement(feature: .complications, isUnlocked: false),
+        .liveActivities: HLLFeatureEntitlement(feature: .liveActivities, isUnlocked: false),
+        .notifications: HLLFeatureEntitlement(feature: .notifications, isUnlocked: false)
+    ])
+    #expect(snapshot.isUnlocked(.widgets, at: soon))
+    #expect(!snapshot.isUnlocked(.widgets, at: soon.addingTimeInterval(61)))
+    #expect(!HLLFeatureEntitlement(feature: .widgets, isUnlocked: true,
+                                   productIDs: ["HLLWidget"], revocationDate: soon)
+        .isActive(at: soon))
+    #expect(HLLPurchaseConfiguration.shipping.definition(for: "HLLWidget")?.features
+        .contains(.liveActivities) == true)
+}

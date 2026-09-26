@@ -4,6 +4,8 @@
 <dict>
 	<key>HLLAppGroupIdentifier</key>
 	<string>group.com.ryankontos.How-Long-Left</string>
+	<key>HLLContextID</key>
+	<string>complication.default</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>

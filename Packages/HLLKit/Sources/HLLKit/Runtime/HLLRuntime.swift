@@ -7,6 +7,12 @@ public actor HLLRuntime {
     public let engine: HLLEventEngine
     public let widgetStore: HLLWidgetSnapshotStore
     public let cloudProjection: HLLCloudProjectionStore?
+    /// StoreKit-backed entitlement coordinator shared by every feature boundary.
+    /// The actor owns transaction updates and persists a small cache for extensions.
+    public let purchases: HLLPurchaseCoordinator
+#if canImport(UserNotifications)
+    public let notifications: HLLNotificationScheduler
+#endif
 #if os(iOS)
     public let liveActivities: HLLLiveActivityCoordinator
 #endif
@@ -14,18 +20,41 @@ public actor HLLRuntime {
     private var lastPublishedAt: Date?
     private var lastCloudProjectionRevision: UInt64?
 
+    #if canImport(UserNotifications)
     private init(eventKit: HLLEventKitSource, repository: HLLRepository,
                  engine: HLLEventEngine, widgetStore: HLLWidgetSnapshotStore,
-                 cloudProjection: HLLCloudProjectionStore?) {
+                 cloudProjection: HLLCloudProjectionStore?,
+                 purchases: HLLPurchaseCoordinator,
+                 notifications: HLLNotificationScheduler) {
         self.eventKit = eventKit
         self.repository = repository
         self.engine = engine
         self.widgetStore = widgetStore
         self.cloudProjection = cloudProjection
+        self.purchases = purchases
+        self.notifications = notifications
 #if os(iOS)
-        self.liveActivities = HLLLiveActivityCoordinator(engine: engine, repository: repository)
+        self.liveActivities = HLLLiveActivityCoordinator(engine: engine, repository: repository,
+                                                         purchases: purchases)
 #endif
     }
+    #else
+    private init(eventKit: HLLEventKitSource, repository: HLLRepository,
+                 engine: HLLEventEngine, widgetStore: HLLWidgetSnapshotStore,
+                 cloudProjection: HLLCloudProjectionStore?,
+                 purchases: HLLPurchaseCoordinator) {
+        self.eventKit = eventKit
+        self.repository = repository
+        self.engine = engine
+        self.widgetStore = widgetStore
+        self.cloudProjection = cloudProjection
+        self.purchases = purchases
+#if os(iOS)
+        self.liveActivities = HLLLiveActivityCoordinator(engine: engine, repository: repository,
+                                                         purchases: purchases)
+#endif
+    }
+    #endif
 
     /// A process has exactly one CloudKit mirror, even when it has several scenes.
     public static func shared(groupIdentifier: String,
@@ -63,9 +92,30 @@ public actor HLLRuntime {
         }
         let identities = HLLIdentityResolver(database: database)
         let engine = HLLEventEngine(eventKit: eventKit, repository: repository, identities: identities)
+        let purchaseStore = HLLPurchaseSnapshotStore(
+            groupIdentifier: groupIdentifier,
+            cloudContainerIdentifier: cloudContainerIdentifier)
+#if canImport(WatchConnectivity)
+        let purchaseBridge = HLLPurchaseWatchBridge(store: purchaseStore)
+        let purchases = HLLPurchaseCoordinator(snapshotStore: purchaseStore,
+                                                watchBridge: purchaseBridge)
+#else
+        let purchases = HLLPurchaseCoordinator(snapshotStore: purchaseStore)
+#endif
+#if canImport(UserNotifications)
+        let notifications = HLLNotificationScheduler(purchases: purchases)
+#endif
+#if canImport(UserNotifications)
         return HLLRuntime(eventKit: eventKit, repository: repository, engine: engine,
                           widgetStore: HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier),
-                          cloudProjection: HLLCloudProjectionStore(containerIdentifier: cloudContainerIdentifier))
+                          cloudProjection: HLLCloudProjectionStore(containerIdentifier: cloudContainerIdentifier),
+                          purchases: purchases, notifications: notifications)
+#else
+        return HLLRuntime(eventKit: eventKit, repository: repository, engine: engine,
+                          widgetStore: HLLWidgetSnapshotStore(groupIdentifier: groupIdentifier),
+                          cloudProjection: HLLCloudProjectionStore(containerIdentifier: cloudContainerIdentifier),
+                          purchases: purchases)
+#endif
     }
 
     /// Call after source or settings changes. Timeline reloads are requested by the app target.

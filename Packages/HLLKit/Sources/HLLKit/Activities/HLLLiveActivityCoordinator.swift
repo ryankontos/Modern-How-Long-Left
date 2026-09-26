@@ -7,13 +7,16 @@ import Foundation
 public actor HLLLiveActivityCoordinator {
     private let engine: HLLEventEngine
     private let repository: HLLRepository
+    private let purchases: HLLPurchaseCoordinator
     private let reducer = HLLEventReducer()
     private var isReconciling = false
     private var needsAnotherPass = false
 
-    public init(engine: HLLEventEngine, repository: HLLRepository) {
+    public init(engine: HLLEventEngine, repository: HLLRepository,
+                purchases: HLLPurchaseCoordinator) {
         self.engine = engine
         self.repository = repository
+        self.purchases = purchases
     }
 
     public var isEnabled: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
@@ -24,7 +27,10 @@ public actor HLLLiveActivityCoordinator {
             .map { $0.attributes.eventKey })
     }
 
-    public func start(_ event: HLLEvent) throws {
+    public func start(_ event: HLLEvent) async throws {
+        guard await purchases.isUnlocked(.liveActivities) else {
+            throw HLLLiveActivityError.premiumRequired
+        }
         guard isEnabled else { throw HLLLiveActivityError.disabled }
         let key = Self.key(for: event)
         guard !activeEventKeys().contains(key) else { return }
@@ -55,6 +61,14 @@ public actor HLLLiveActivityCoordinator {
     }
 
     private func performReconcile(now: Date, mayStart: Bool) async throws {
+        guard await purchases.isUnlocked(.liveActivities) else {
+            // A revocation or expiry must remove already running activities as
+            // well as prevent new ones. The next purchase update will reconcile.
+            for activity in Activity<HLLLiveActivityAttributes>.activities {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+            return
+        }
         let policies = try await repository.activityPolicies()
         let interval = DateInterval(start: now.addingTimeInterval(-86_400),
                                     end: now.addingTimeInterval(14 * 86_400))
@@ -130,6 +144,13 @@ public actor HLLLiveActivityCoordinator {
 
 public enum HLLLiveActivityError: LocalizedError {
     case disabled
-    public var errorDescription: String? { "Live Activities are disabled for How Long Left." }
+    case premiumRequired
+
+    public var errorDescription: String? {
+        switch self {
+        case .disabled: "Live Activities are disabled for How Long Left."
+        case .premiumRequired: "Live Activities are available with How Long Left Premium."
+        }
+    }
 }
 #endif

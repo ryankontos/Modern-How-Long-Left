@@ -15,6 +15,7 @@ struct HowLongLeftComplicationsBundle: WidgetBundle {
         HLLWidget(kind: "HowLongLeftComplications", contextID: "complication.default",
                   groupIdentifier: HLLConfiguration.appGroupIdentifier,
                   cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier,
-                  families: [.accessoryInline, .accessoryCircular, .accessoryRectangular])
+                  families: [.accessoryInline, .accessoryCircular, .accessoryRectangular],
+                  requiredFeature: .complications)
     }
 }

@@ -41,14 +41,41 @@ public struct HLLCloudProjectionStore: Sendable {
     public func write(_ payload: HLLWidgetPayload) async {
         do {
             let recordID = CKRecord.ID(recordName: Self.recordName)
-            let record = CKRecord(recordType: Self.recordType, recordID: recordID)
-            record["payload"] = try JSONEncoder().encode(payload) as CKRecordValue
-            record["generatedAt"] = payload.generatedAt as CKRecordValue
-            record["revision"] = payload.revision as CKRecordValue
-            _ = try await CKContainer(identifier: containerIdentifier)
-                .privateCloudDatabase.save(record)
+            let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
+            let encoded = try JSONEncoder().encode(payload) as CKRecordValue
+            let update: (CKRecord) -> Void = { record in
+                record["payload"] = encoded
+                record["generatedAt"] = payload.generatedAt as CKRecordValue
+                record["revision"] = payload.revision as CKRecordValue
+            }
+            try await saveReplacing(recordID: recordID, database: database, update: update)
         } catch {
             // The local App Group projection remains the fallback source.
+        }
+    }
+
+    private func saveReplacing(recordID: CKRecord.ID, database: CKDatabase,
+                               update: (CKRecord) -> Void) async throws {
+        do {
+            let record = try await database.record(for: recordID)
+            update(record)
+            do {
+                _ = try await database.save(record)
+            } catch let error as CKError where error.code == .serverRecordChanged {
+                let latest = try await database.record(for: recordID)
+                update(latest)
+                _ = try await database.save(latest)
+            }
+        } catch let error as CKError where error.code == .unknownItem {
+            let record = CKRecord(recordType: Self.recordType, recordID: recordID)
+            update(record)
+            do {
+                _ = try await database.save(record)
+            } catch let conflict as CKError where conflict.code == .serverRecordChanged {
+                let latest = try await database.record(for: recordID)
+                update(latest)
+                _ = try await database.save(latest)
+            }
         }
     }
 }

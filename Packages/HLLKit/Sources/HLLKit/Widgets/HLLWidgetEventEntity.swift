@@ -39,7 +39,14 @@ public struct HLLWidgetEventQuery: EntityQuery {
               let payload = await HLLExtensionSnapshotLoader().load(
                   groupIdentifier: group,
                   cloudContainerIdentifier: HLLConfiguration.cloudContainerIdentifier) else { return [] }
-        return payload.events.filter { $0.end > .now }.sorted { $0.start < $1.start }
-            .prefix(100).map(HLLWidgetEventEntity.init)
+        let context = HLLContextID(rawValue:
+            (Bundle.main.object(forInfoDictionaryKey: "HLLContextID") as? String)
+            ?? "widget.default")
+        let now = Date()
+        let query = HLLEventQuery(
+            interval: DateInterval(start: now.addingTimeInterval(-86_400),
+                                   end: now.addingTimeInterval(14 * 86_400)),
+            rule: .upcoming(now), context: context, limit: 100)
+        return payload.query(query).map(HLLWidgetEventEntity.init)
     }
 }

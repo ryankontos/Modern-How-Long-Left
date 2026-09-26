@@ -10,6 +10,18 @@ struct SettingsView: View {
             List {
                 Section {
                     NavigationLink {
+                        PurchaseSettingsView(model: model)
+                    } label: {
+                        HLLSettingsRow(title: "Premium Access",
+                                       subtitle: model.purchaseSnapshot.isUnlocked(.widgets)
+                                           ? "Widgets and extras are unlocked"
+                                           : "Unlock widgets, activities, and notifications",
+                                       systemImage: model.purchaseSnapshot.isUnlocked(.widgets)
+                                           ? "checkmark.seal.fill" : "lock.fill",
+                                       tint: model.purchaseSnapshot.isUnlocked(.widgets)
+                                           ? .green : .orange)
+                    }
+                    NavigationLink {
                         CalendarPreferencesView(model: model)
                     } label: {
                         HLLSettingsRow(title: "Calendar Preferences",
@@ -220,6 +232,11 @@ private struct WidgetSettingsView: View {
                 Text("Every widget and complication has its own configuration: current, in progress, all upcoming, all-day filtering, a pinned event, style, and event count. These defaults are used when creating a new configuration.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if !model.isFeatureUnlocked(.widgets) {
+                    Label("Widgets are locked until Premium is purchased.", systemImage: "lock.fill")
+                        .foregroundStyle(.orange)
+                        .font(.footnote)
+                }
             }
 
             Section("New widget defaults") {
@@ -292,15 +309,102 @@ private struct ActivitySettingsView: View {
                 Text("Live Activities use date-driven timers for smooth countdowns and scheduled starts. You can also start or stop one from any event card's context menu.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if !model.isFeatureUnlocked(.liveActivities) {
+                    Label("Live Activities are a Premium feature.", systemImage: "lock.fill")
+                        .foregroundStyle(.orange)
+                        .font(.footnote)
+                }
             }
             Section("Automatic tracking") {
                 Toggle("Track all events", isOn: Binding(
                     get: { model.isAutomaticallyTracking(.allEvents) },
                     set: { model.setAutomaticTracking(.allEvents, enabled: $0) }
                 ))
+                .disabled(!model.isFeatureUnlocked(.liveActivities))
             }
         }
         .navigationTitle("Live Activities")
+    }
+}
+
+/// StoreKit UI stays in the app target; HLLKit only exposes verified values and
+/// product metadata. This keeps purchase flows testable without coupling the
+/// event engine to SwiftUI.
+private struct PurchaseSettingsView: View {
+    let model: HLLAppModel
+
+    var body: some View {
+        List {
+            Section("Feature access") {
+                PurchaseFeatureRow(title: "Widgets", feature: .widgets,
+                                   snapshot: model.purchaseSnapshot)
+                PurchaseFeatureRow(title: "Apple Watch complications", feature: .complications,
+                                   snapshot: model.purchaseSnapshot)
+                PurchaseFeatureRow(title: "Live Activities", feature: .liveActivities,
+                                   snapshot: model.purchaseSnapshot)
+                PurchaseFeatureRow(title: "Notifications", feature: .notifications,
+                                   snapshot: model.purchaseSnapshot)
+            }
+
+            Section("Available purchases") {
+                if model.purchaseProducts.isEmpty {
+                    Text("Products will appear when the App Store is available.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.purchaseProducts) { product in
+                        Button {
+                            model.purchase(productID: product.id)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack {
+                                    Text(product.displayName)
+                                    Spacer()
+                                    Text(product.displayPrice).fontWeight(.semibold)
+                                }
+                                Text(product.description)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Button("Restore Purchases", systemImage: "arrow.clockwise") {
+                    model.restorePurchases()
+                }
+            }
+
+            Section {
+                Text("StoreKit is the source of truth. HLLKit mirrors verified status to the private iCloud database, the App Group, and the paired watch so extensions can stay current even when the app is not open.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Premium Access")
+        .task { model.loadPurchaseProducts() }
+        .alert("Purchase update failed", isPresented: Binding(
+            get: { model.purchaseErrorMessage != nil },
+            set: { if !$0 { model.purchaseErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { model.purchaseErrorMessage = nil }
+        } message: {
+            Text(model.purchaseErrorMessage ?? "")
+        }
+    }
+}
+
+private struct PurchaseFeatureRow: View {
+    let title: String
+    let feature: HLLPaidFeature
+    let snapshot: HLLPurchaseSnapshot
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: snapshot.isUnlocked(feature) ? "checkmark.circle.fill" : "lock.circle")
+                .foregroundStyle(snapshot.isUnlocked(feature) ? .green : .secondary)
+        }
     }
 }
 

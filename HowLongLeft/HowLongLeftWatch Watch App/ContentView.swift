@@ -211,6 +211,14 @@ private struct WatchSettingsView: View {
                 }
                 Section {
                     NavigationLink {
+                        WatchPurchaseSettingsView(model: model)
+                    } label: {
+                        Label("Premium Access", systemImage: model.isFeatureUnlocked(.complications)
+                              ? "checkmark.seal.fill" : "lock.fill")
+                    }
+                }
+                Section {
+                    NavigationLink {
                         WatchWidgetSettingsView()
                     } label: {
                         Label("Widgets & Complications", systemImage: "watchface")
@@ -249,6 +257,73 @@ private struct WatchWidgetSettingsView: View {
             }
         }
         .navigationTitle("Complications")
+    }
+}
+
+private struct WatchPurchaseSettingsView: View {
+    let model: WatchEventModel
+
+    var body: some View {
+        List {
+            Section("Feature access") {
+                WatchPurchaseFeatureRow(title: "Complications", feature: .complications,
+                                        snapshot: model.purchaseSnapshot)
+                WatchPurchaseFeatureRow(title: "Widgets", feature: .widgets,
+                                        snapshot: model.purchaseSnapshot)
+                WatchPurchaseFeatureRow(title: "Live Activities", feature: .liveActivities,
+                                        snapshot: model.purchaseSnapshot)
+                WatchPurchaseFeatureRow(title: "Notifications", feature: .notifications,
+                                        snapshot: model.purchaseSnapshot)
+            }
+            Section("Available purchases") {
+                if model.purchaseProducts.isEmpty {
+                    Text("Products will appear when the App Store is available.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.purchaseProducts) { product in
+                        Button {
+                            model.purchase(productID: product.id)
+                        } label: {
+                            HStack {
+                                Text(product.displayName)
+                                Spacer()
+                                Text(product.displayPrice).font(.caption.weight(.semibold))
+                            }
+                        }
+                    }
+                }
+                Button("Restore Purchases", systemImage: "arrow.clockwise") {
+                    model.restorePurchases()
+                }
+            }
+            Section {
+                Text("Purchase status is verified by StoreKit and mirrored through iCloud and WatchConnectivity.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Premium Access")
+        .task { model.loadPurchaseProducts() }
+        .alert("Purchase update failed", isPresented: Binding(
+            get: { model.purchaseErrorMessage != nil },
+            set: { if !$0 { model.purchaseErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { model.purchaseErrorMessage = nil }
+        } message: {
+            Text(model.purchaseErrorMessage ?? "")
+        }
+    }
+}
+
+private struct WatchPurchaseFeatureRow: View {
+    let title: String
+    let feature: HLLPaidFeature
+    let snapshot: HLLPurchaseSnapshot
+
+    var body: some View {
+        Label(title, systemImage: snapshot.isUnlocked(feature)
+              ? "checkmark.circle.fill" : "lock.circle")
+            .foregroundStyle(snapshot.isUnlocked(feature) ? .green : .secondary)
     }
 }
 

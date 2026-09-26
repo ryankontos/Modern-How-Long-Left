@@ -30,6 +30,18 @@ public struct HLLWidgetEntry: TimelineEntry {
     public let date: Date
     public let events: [HLLEvent]
     public let style: HLLWidgetStyle
+
+    /// Locked entries are still valid timeline entries. Rendering a lock
+    /// instead of stale event data keeps a revoked entitlement private.
+    public let isLocked: Bool
+
+    public init(date: Date, events: [HLLEvent], style: HLLWidgetStyle,
+                isLocked: Bool = false) {
+        self.date = date
+        self.events = events
+        self.style = style
+        self.isLocked = isLocked
+    }
 }
 
 /// WidgetKit reads a small snapshot; the app refreshes it after observed changes.
@@ -40,12 +52,15 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
     private let contextID: HLLContextID
     private let groupIdentifier: String
     private let cloudContainerIdentifier: String?
+    private let requiredFeature: HLLPaidFeature
 
     public init(contextID: HLLContextID, groupIdentifier: String,
-                cloudContainerIdentifier: String?) {
+                cloudContainerIdentifier: String?,
+                requiredFeature: HLLPaidFeature = .widgets) {
         self.contextID = contextID
         self.groupIdentifier = groupIdentifier
         self.cloudContainerIdentifier = cloudContainerIdentifier
+        self.requiredFeature = requiredFeature
     }
 
     /// watchOS requires this method; an empty list leaves configuration to the user.
@@ -70,6 +85,14 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
 
     private func entries(for configuration: HLLWidgetConfigurationIntent) async -> [HLLWidgetEntry] {
         let now = Date()
+        let purchaseStore = HLLPurchaseSnapshotStore(
+            groupIdentifier: groupIdentifier,
+            cloudContainerIdentifier: cloudContainerIdentifier)
+        let purchase = await HLLPurchaseEntitlementReader(store: purchaseStore).read()
+        guard purchase.isUnlocked(requiredFeature, at: now) else {
+            return [HLLWidgetEntry(date: now, events: [], style: configuration.style,
+                                   isLocked: true)]
+        }
         let payload = await HLLExtensionSnapshotLoader().load(
             groupIdentifier: groupIdentifier,
             cloudContainerIdentifier: cloudContainerIdentifier,
@@ -100,33 +123,40 @@ public struct HLLWidget: Widget {
     private let groupIdentifier: String
     private let cloudContainerIdentifier: String?
     private let families: [WidgetFamily]
+    private let requiredFeature: HLLPaidFeature
 
     public init() {
 #if os(watchOS)
         self.init(kind: "HLLWidget", contextID: "default",
-                  groupIdentifier: "", families: [.accessoryRectangular])
+                  groupIdentifier: "", families: [.accessoryRectangular],
+                  requiredFeature: .widgets)
 #else
         self.init(kind: "HLLWidget", contextID: "default",
-                  groupIdentifier: "", families: [.systemSmall])
+                  groupIdentifier: "", families: [.systemSmall],
+                  requiredFeature: .widgets)
 #endif
     }
 
     public init(kind: String, contextID: HLLContextID, groupIdentifier: String,
                 cloudContainerIdentifier: String? = nil,
-                families: [WidgetFamily]) {
+                families: [WidgetFamily],
+                requiredFeature: HLLPaidFeature = .widgets) {
         self.kind = kind
         self.contextID = contextID
         self.groupIdentifier = groupIdentifier
         self.cloudContainerIdentifier = cloudContainerIdentifier
         self.families = families
+        self.requiredFeature = requiredFeature
     }
 
     public var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: kind, intent: HLLWidgetConfigurationIntent.self,
                                provider: HLLWidgetProvider(contextID: contextID,
                                                            groupIdentifier: groupIdentifier,
-                                                           cloudContainerIdentifier: cloudContainerIdentifier)) { entry in
-            HLLWidgetEventView(events: entry.events, date: entry.date, style: entry.style)
+                                                           cloudContainerIdentifier: cloudContainerIdentifier,
+                                                           requiredFeature: requiredFeature)) { entry in
+            HLLWidgetEventView(events: entry.events, date: entry.date, style: entry.style,
+                               isLocked: entry.isLocked)
         }
         .configurationDisplayName("How Long Left")
         .description("Current and upcoming events at a glance.")

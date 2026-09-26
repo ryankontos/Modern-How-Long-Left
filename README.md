@@ -19,7 +19,9 @@ HowLongLeft.xcworkspace/
         ├── Persistence/                 # Core Data + CloudKit repository
         ├── Runtime/                     # one runtime per process
         ├── Widgets/                     # extension snapshot and WidgetKit types
-        └── Activities/                  # iOS Live Activity policy/coordinator
+        ├── Activities/                  # iOS Live Activity policy/coordinator
+        ├── Commerce/                    # StoreKit 2 entitlements and cross-device cache
+        └── Notifications/               # entitlement-gated notification scheduler
 ```
 
 ## Data flow
@@ -40,6 +42,16 @@ The model uses scalar indexed keys and an encoded payload so CloudKit records re
 Maintenance is bounded and infrequent: expired occurrence annotations, old local identity aliases, duplicate logical rows, and safely exported persistent history are removed during a background maintenance pass no more than monthly. The App Group file is a single replacement snapshot, so it does not accumulate one file per refresh.
 
 The app also writes the latest extension projection to one replaceable private CloudKit record. Extensions try that record with a short timeout and select the newest result between CloudKit and the local App Group snapshot. If the account is offline or unavailable, the local snapshot remains usable.
+
+`NSPersistentCloudKitContainer` is used for durable app data, not opened by extensions. This keeps Core Data's import/export machinery in one process and avoids the multi-process mirroring races that can make an extension hang or duplicate records. HLLKit enables persistent history and remote-change notifications, uses separate Cloud and Local configurations, upserts by logical key, and prunes only old exported history. Replaceable App Group and CloudKit projections are used where a timeline extension needs a tiny, bounded read.
+
+## Paid capabilities
+
+StoreKit 2 is the authority for widgets, complications, Live Activities, and notifications. `HLLPurchaseCoordinator` listens to `Transaction.updates`, evaluates verified latest/current entitlements, and treats expiry and revocation as locked immediately. Product metadata is configuration, so the same code supports a non-consumable, an auto-renewing subscription, or a non-renewing subscription without changing the event engine.
+
+The current shipping map retains the existing product identifiers (`HLLWidget` and `ComplicationIAPHLL`) while the App Store catalog is finalized. The coordinator persists a small, replace-in-place entitlement projection in the App Group and the user's private CloudKit database. WatchConnectivity sends the same projection to the paired watch. These copies are caches and backups only: app, watch, and extensions read StoreKit when available, use the cache when offline, and always re-check entitlement dates before rendering or scheduling. Explicit restore calls `AppStore.sync()`; the transaction listener handles normal cross-device delivery.
+
+Widget and complication timelines return a lock entry when the capability is unavailable, so they never expose stale event data after a revocation. The configuration intent remains explicit on watchOS 27 and offers current, in-progress, all/upcoming, all-day filtering, a selected event, and multiple countdown/progress styles. Live Activity and notification scheduling are guarded in HLLKit at their service boundaries as well as in the app UI.
 
 The iOS shell uses a UIKit app and scene delegate with a `UIHostingController` root. SwiftUI provides a Current tab with live countdowns, a separate Upcoming tab, event details, context-menu actions, and a settings sheet. The watch app has its own runtime and a compact vertical-page interface, so it continues to use watchOS calendars when the iPhone is unavailable. Both apps keep the first frame blank until the first event snapshot exists, then fade the loaded content in.
 
