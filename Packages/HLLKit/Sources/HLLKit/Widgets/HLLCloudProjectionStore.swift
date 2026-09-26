@@ -9,7 +9,15 @@ import Foundation
 /// mirroring races and keeps timeline work bounded.
 public struct HLLCloudProjectionStore: Sendable {
     public static let recordType = "HLLWidgetProjection"
-    public static let recordName = "current"
+    /// iPhone and watch have different EventKit universes. Keeping separate
+    /// records prevents a watch refresh from becoming an iOS widget payload.
+    public static var recordName: String {
+#if os(watchOS)
+        "current-watchOS"
+#else
+        "current-iOS"
+#endif
+    }
 
     private let containerIdentifier: String
 
