@@ -3,7 +3,23 @@ import Foundation
 /// A widget refreshes EventKit itself when WidgetKit asks for a timeline.
 /// It never opens the app's CloudKit mirror or requests calendar permission.
 public struct HLLExtensionSnapshotLoader: Sendable {
-    public init() {}
+    /// iOS can use its last local EventKit projection while access is not
+    /// currently available. watchOS must never do that: its calendar universe
+    /// is independent, so an iPhone projection would show the wrong events.
+    private let allowsCachedCalendarEventsWhenUnauthorized: Bool
+
+    public init(allowsCachedCalendarEventsWhenUnauthorized: Bool = Self.defaultCachedCalendarFallback) {
+        self.allowsCachedCalendarEventsWhenUnauthorized = allowsCachedCalendarEventsWhenUnauthorized
+    }
+
+    @usableFromInline
+    internal static var defaultCachedCalendarFallback: Bool {
+#if os(watchOS)
+        false
+#else
+        true
+#endif
+    }
 
     public func load(groupIdentifier: String, cloudContainerIdentifier: String? = nil,
                      now: Date = .now) async -> HLLWidgetPayload? {
@@ -21,7 +37,11 @@ public struct HLLExtensionSnapshotLoader: Sendable {
         let interval = DateInterval(start: now.addingTimeInterval(-86_400),
                                     end: now.addingTimeInterval(14 * 86_400))
         let authorized = await source.authorizationStatus() == .fullAccess
-        guard authorized else { return expandUserEvents(in: seed, interval: interval, now: now) }
+        guard authorized else {
+            return expandUserEvents(in: seed, interval: interval, now: now,
+                                    includeCachedCalendarEvents:
+                                        allowsCachedCalendarEventsWhenUnauthorized)
+        }
 
         let raw = await source.events(in: interval)
         let sharedProfiles = shared?.calendars ?? []
@@ -195,9 +215,11 @@ public struct HLLExtensionSnapshotLoader: Sendable {
     }
 
     private func expandUserEvents(in cached: HLLWidgetPayload?, interval: DateInterval,
-                                  now: Date) -> HLLWidgetPayload? {
+                                  now: Date, includeCachedCalendarEvents: Bool) -> HLLWidgetPayload? {
         guard let cached else { return nil }
-        let calendarEvents = cached.events.filter { $0.source == .eventKit && $0.end > now }
+        let calendarEvents = includeCachedCalendarEvents
+            ? cached.events.filter { $0.source == .eventKit && $0.end > now }
+            : []
         return HLLWidgetPayload(revision: cached.revision, generatedAt: cached.generatedAt,
                                 expiresAt: interval.end,
                                 events: calendarEvents + userOccurrences(from: cached, in: interval),

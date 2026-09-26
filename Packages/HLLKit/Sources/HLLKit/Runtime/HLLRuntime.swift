@@ -74,6 +74,12 @@ public actor HLLRuntime {
                 for: .applicationSupportDirectory, in: .userDomainMask)[0].appending(path: "HLLKit")
         let database = try await HLLDatabase.open(directory: directory,
                                                    cloudContainerIdentifier: cloudContainerIdentifier)
+        // Direct CloudKit projection records need explicit subscriptions. Do
+        // this after the stores are open and never make launch wait for it.
+        Task.detached(priority: .utility) {
+            _ = await HLLCloudKitSubscriptionInstaller(
+                containerIdentifier: cloudContainerIdentifier).install()
+        }
         let eventKit = HLLEventKitSource()
         let repository = HLLRepository(database: database)
         Task.detached(priority: .background) {

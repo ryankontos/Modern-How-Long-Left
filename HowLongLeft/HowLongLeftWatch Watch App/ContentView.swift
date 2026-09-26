@@ -62,9 +62,9 @@ private struct WatchEventListView: View {
                             NavigationLink(value: event.id) {
                                 WatchEventCard(event: event, now: context.date)
                             }
-                            .contextMenu {
+                            .contextMenu(menuItems: {
                                 WatchEventActions(event: event, model: model)
-                            }
+                            })
                         }
                         .listStyle(.carousel)
                     }

@@ -98,7 +98,7 @@ final class WatchEventModel {
             return payload?.query(HLLEventQuery(
                 interval: DateInterval(start: now.addingTimeInterval(-86_400),
                                        end: now.addingTimeInterval(14 * 86_400)),
-                rule: .upcoming(now), context: "watch.main"))
+                rule: .and([.source(.user), .upcoming(now)]), context: "watch.main"))
         }
         Task { [weak self] in
             guard let events = await quickEvents.value else { return }

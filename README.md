@@ -43,6 +43,8 @@ Maintenance is bounded and infrequent: expired occurrence annotations, old local
 
 The app also writes the latest extension projection to one replaceable private CloudKit record. Extensions try that record with a short timeout and select the newest result between CloudKit and the local App Group snapshot. Shared profiles, user definitions, and annotations are merged by record ID and `updatedAt`, so a newer cross-device overlay cannot erase a device-local hidden event. If the account is offline or unavailable, the local snapshot remains usable. The iOS target enables CloudKit remote-notification delivery and refreshes this projection during a background push, so a scene does not need to be opened for a synced change to reach WidgetKit.
 
+`HLLCloudKitSubscriptionInstaller` creates idempotent silent-push query subscriptions for the widget projection, shared settings projection, and purchase projection. CloudKit may coalesce pushes, so the app and watch treat each notification as a refresh hint and rebuild the bounded projection from authoritative sources. Subscription setup runs in a utility task after the stores open and never delays the first frame.
+
 A second small CloudKit record contains only portable shared settings: synced user-event definitions, calendar profiles and visibility, and portable hidden/pinned annotations. iOS and watchOS merge this overlay with their own EventKit projection, so a complication can learn about a cross-device setting change without importing the other platform's calendar IDs.
 
 `NSPersistentCloudKitContainer` is used for durable app data, not opened by extensions. This keeps Core Data's import/export machinery in one process and avoids the multi-process mirroring races that can make an extension hang or duplicate records. HLLKit enables persistent history and remote-change notifications, uses separate Cloud and Local configurations, upserts by logical key, and prunes only old exported history. Replaceable App Group and CloudKit projections are used where a timeline extension needs a tiny, bounded read.
@@ -62,6 +64,8 @@ The iOS shell uses a UIKit app and scene delegate with a `UIHostingController` r
 Widgets and complications use `AppIntentConfiguration`. Users can choose current, in-progress, or upcoming events, include or exclude all-day events, select one event, choose a style, and choose a row count. WatchOS intentionally returns no recommendations so configuration remains explicit.
 
 The extension loader refreshes EventKit on every timeline request when access is available, expands user recurrences from the cached definitions, and applies the cached settings and annotations before producing a timeline. Timer text is date-driven; progress and detailed styles receive bounded 15-minute intermediate entries.
+
+The watch extension never falls back to an iPhone calendar projection when watch EventKit access is unavailable. It shows only portable user events until watch calendars can be read, then replaces that seed with the watch's own EventKit snapshot.
 
 Live Activities use the same `HLLEvent` query path. A user can start one immediately or create a local policy for a specific event, calendar profile, or all events. Policies can schedule a start before an event, reconcile settings and hidden events, update changed dates, and end activities that are no longer visible.
 
