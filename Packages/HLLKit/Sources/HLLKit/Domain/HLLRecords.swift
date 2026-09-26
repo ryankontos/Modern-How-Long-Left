@@ -5,16 +5,21 @@ public struct HLLCalendarPreference: Codable, Sendable, Equatable {
     public var id: UUID
     public var title: String
     public var sourceTitle: String
+    /// EventKit source identifiers survive local calendar identifier changes
+    /// more reliably than a calendar's device-local ID.
+    public var sourceIdentifier: String?
     /// A missing context is visible. New contexts need no schema change.
     public var visibility: [HLLContextID: Bool]
     public var updatedAt: Date
 
     public init(id: UUID = UUID(), title: String, sourceTitle: String = "",
+                sourceIdentifier: String? = nil,
                 visibility: [HLLContextID: Bool] = [:],
                 updatedAt: Date = .now) {
         self.id = id
         self.title = title
         self.sourceTitle = sourceTitle
+        self.sourceIdentifier = sourceIdentifier
         self.visibility = visibility
         self.updatedAt = updatedAt
     }

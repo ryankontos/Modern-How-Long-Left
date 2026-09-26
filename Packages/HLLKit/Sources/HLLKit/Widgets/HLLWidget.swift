@@ -108,7 +108,11 @@ public struct HLLWidgetProvider: AppIntentTimelineProvider {
             rule: { date in
                 var rules: [HLLEventRule] = [mode.rule(at: date)]
                 if !includeAllDay { rules.append(.allDay(false)) }
-                if let selectedID { rules.append(.custom { $0.id.uuidString == selectedID }) }
+                if let selectedID {
+                    rules.append(.custom {
+                        $0.id.uuidString == selectedID || $0.portableKey == selectedID
+                    })
+                }
                 return .and(rules)
             })
         return points.map { HLLWidgetEntry(date: $0.date, events: $0.events,

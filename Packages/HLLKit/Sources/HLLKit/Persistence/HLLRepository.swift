@@ -193,12 +193,32 @@ public actor HLLRepository {
             if let profileID = byLocalID[calendar.localID], let existing = byID[profileID] {
                 preference = existing
             } else {
-                let candidates = profiles.filter {
+                let sourceCandidates = profiles.filter {
+                    guard let sourceIdentifier = calendar.sourceIdentifier,
+                          !sourceIdentifier.isEmpty else { return false }
+                    return $0.sourceIdentifier == sourceIdentifier
+                        && $0.title == calendar.title
+                        && $0.sourceTitle == calendar.sourceTitle
+                }
+                let titleCandidates = profiles.filter {
                     $0.title == calendar.title && $0.sourceTitle == calendar.sourceTitle
                 }
-                preference = candidates.count == 1 ? candidates[0] : HLLCalendarPreference(
-                    title: calendar.title, sourceTitle: calendar.sourceTitle)
-                if candidates.count != 1 { try await save(preference) }
+                if sourceCandidates.count == 1 {
+                    preference = sourceCandidates[0]
+                } else if sourceCandidates.isEmpty && titleCandidates.count == 1 {
+                    // This also adopts a profile created before source IDs
+                    // were stored, without creating a second preference.
+                    preference = titleCandidates[0]
+                } else {
+                    let identity = calendar.sourceIdentifier ?? calendar.localID
+                    preference = HLLCalendarPreference(
+                        id: HLLStableID.make(["calendar-profile", identity,
+                                               calendar.title, calendar.sourceTitle]),
+                        title: calendar.title,
+                        sourceTitle: calendar.sourceTitle,
+                        sourceIdentifier: calendar.sourceIdentifier)
+                    try await save(preference)
+                }
                 let binding = HLLCalendarBinding(localCalendarID: calendar.localID,
                                                   profileID: preference.id)
                 try await database.put(binding, kind: .calendarBinding,

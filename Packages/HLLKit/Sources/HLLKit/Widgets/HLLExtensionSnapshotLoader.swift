@@ -128,6 +128,14 @@ public struct HLLExtensionSnapshotLoader: Sendable {
 
     private func matchingProfile(for event: HLLEventKitSource.RawEvent,
                                  in profiles: [HLLCalendarPreference]) -> HLLCalendarPreference? {
+        let sourceMatches = profiles.filter {
+            guard let sourceIdentifier = event.calendarSourceIdentifier,
+                  !sourceIdentifier.isEmpty else { return false }
+            return $0.sourceIdentifier == sourceIdentifier
+                && $0.title == event.calendarTitle
+                && $0.sourceTitle == event.calendarSourceTitle
+        }
+        if sourceMatches.count == 1 { return sourceMatches[0] }
         let matches = profiles.filter {
             $0.title == event.calendarTitle && $0.sourceTitle == event.calendarSourceTitle
         }

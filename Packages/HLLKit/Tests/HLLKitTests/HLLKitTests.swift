@@ -75,6 +75,23 @@ import Testing
     #expect(loaded.isVisible(in: "new.context"))
 }
 
+@Test func calendarProfileFollowsEventKitSourceWhenLocalIDChanges() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try await HLLDatabase.open(directory: directory, cloudContainerIdentifier: nil)
+    let repository = HLLRepository(database: database)
+
+    let first = HLLEventKitSource.CalendarInfo(localID: "local-1", title: "Home",
+                                                sourceTitle: "iCloud",
+                                                sourceIdentifier: "source-1")
+    let second = HLLEventKitSource.CalendarInfo(localID: "local-2", title: "Home",
+                                                 sourceTitle: "iCloud",
+                                                 sourceIdentifier: "source-1")
+    let firstProfile = try #require(await repository.bind([first])[first.localID])
+    let secondProfile = try #require(await repository.bind([second])[second.localID])
+    #expect(firstProfile.id == secondProfile.id)
+}
+
 @Test func appSettingsAndWidgetDefaultsStayTypeSafe() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -160,6 +177,13 @@ import Testing
     let points = HLLWidgetTimelinePlanner().plan(payload: payload, now: start,
         context: "new.widget.mode", limit: 3, rule: { .upcoming($0) })
     #expect(points.allSatisfy { $0.events.isEmpty })
+}
+
+@Test func widgetEventEntityPrefersPortableIdentity() {
+    let event = HLLEvent(id: UUID(), source: .eventKit, title: "Pinned",
+                         start: .now, end: .now.addingTimeInterval(900),
+                         portableKey: "calendar-profile|event|occurrence")
+    #expect(HLLWidgetEventEntity(event: event).id == event.portableKey)
 }
 
 @Test func purchaseSnapshotsRespectExpiryAndRevocation() {

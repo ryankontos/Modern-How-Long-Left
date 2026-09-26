@@ -1,7 +1,11 @@
 import AppIntents
 import Foundation
 
-/// A configurable widget can follow one stable HLL event ID.
+/// A configurable widget can follow one stable HLL event reference.
+///
+/// EventKit's local UUID can be replaced after an account refresh. When HLLKit
+/// has a portable identity, AppIntent stores that value instead so a pinned
+/// event remains selectable after the source is reloaded.
 public struct HLLWidgetEventEntity: AppEntity, Sendable {
     public static var typeDisplayRepresentation: TypeDisplayRepresentation { "Event" }
     public static var defaultQuery: HLLWidgetEventQuery { HLLWidgetEventQuery() }
@@ -15,7 +19,7 @@ public struct HLLWidgetEventEntity: AppEntity, Sendable {
     }
 
     public init(event: HLLEvent) {
-        id = event.id.uuidString
+        id = event.portableKey ?? event.id.uuidString
         title = event.title
         start = event.start
     }

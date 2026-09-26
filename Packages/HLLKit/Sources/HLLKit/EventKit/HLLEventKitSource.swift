@@ -7,6 +7,7 @@ public actor HLLEventKitSource {
         public let localID: String
         public let title: String
         public let sourceTitle: String
+        public let sourceIdentifier: String?
     }
 
     public struct RawEvent: Sendable {
@@ -15,6 +16,7 @@ public actor HLLEventKitSource {
         public let calendarLocalID: String
         public let calendarTitle: String
         public let calendarSourceTitle: String
+        public let calendarSourceIdentifier: String?
         public let title: String
         public let start: Date
         public let end: Date
@@ -41,7 +43,8 @@ public actor HLLEventKitSource {
     public func calendars() -> [CalendarInfo] {
         store.calendars(for: .event).map {
             CalendarInfo(localID: $0.calendarIdentifier, title: $0.title,
-                         sourceTitle: $0.source.title)
+                         sourceTitle: $0.source.title,
+                         sourceIdentifier: $0.source.sourceIdentifier)
         }
     }
 
@@ -56,6 +59,7 @@ public actor HLLEventKitSource {
                      calendarLocalID: event.calendar.calendarIdentifier,
                      calendarTitle: event.calendar.title,
                      calendarSourceTitle: event.calendar.source.title,
+                     calendarSourceIdentifier: event.calendar.source.sourceIdentifier,
                      title: event.title ?? "Untitled Event",
                      start: event.startDate, end: event.endDate,
                      occurrenceStart: event.occurrenceDate ?? event.startDate,
